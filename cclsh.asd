@@ -6,5 +6,6 @@
   :components ((:module "source"
                 :components
                 ((:file "package")
-                 (:file "terminal" :depends-on ("package")))))
+                 (:file "terminal" :depends-on ("package"))
+                 (:file "lexer"    :depends-on ("package")))))
   :description "A system shell running inside Clozure CL")
