@@ -9,6 +9,35 @@
 (asdf:load-asd (truename "cclsh.asd"))
 (asdf:load-system "cclsh")
 
+(defun build-git-output (arguments)
+  "Trimmed output of git ARGUMENTS, or NIL when git fails."
+  (handler-case
+      (let* ((output  (make-string-output-stream))
+             (process (ccl:run-program "git" arguments
+                                       :input  nil
+                                       :output output
+                                       :error  nil
+                                       :wait   t)))
+        (multiple-value-bind (status code)
+            (ccl:external-process-status process)
+          (when (and (eq status ':exited) (zerop code))
+            (string-trim '(#\newline #\space)
+                         (get-output-stream-string output)))))
+    (error () nil)))
+
+(defun build-git-commit ()
+  "The short commit of the checkout, with a -dirty marker when the
+   working tree has uncommitted changes. NIL outside a git checkout."
+  (let ((commit (build-git-output '("rev-parse" "--short" "HEAD"))))
+    (when (and commit (plusp (length commit)))
+      (if (plusp (length (or (build-git-output '("status" "--porcelain")) "")))
+          (concatenate 'string commit "-dirty")
+          commit))))
+
+(let ((commit (build-git-commit)))
+  (setf cclsh:*cclsh-build-commit* commit)
+  (format t "Build commit: ~a~%" (or commit "unknown")))
+
 (let ((setup (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname))))
   (if (probe-file setup)
       (progn

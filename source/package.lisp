@@ -18,6 +18,8 @@
   (:shadow #:export)
   (:export #:main
            #:shell-toplevel
+           #:*cclsh-version*
+           #:*cclsh-build-commit*
            #:command
            #:command-name
            #:command-function

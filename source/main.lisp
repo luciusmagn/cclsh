@@ -12,6 +12,10 @@
 (defparameter *cclsh-version* "1.0.0"
   "The cclsh version reported by --version.")
 
+(defvar *cclsh-build-commit* nil
+  "Git commit the running binary was built from, stamped into the
+   image by scripts/build.lisp. NIL in plain REPL sessions.")
+
 (defun terminal-encoding-setup ()
   "Switch the terminal streams to UTF-8."
   (let ((format (make-external-format :character-encoding ':utf-8
@@ -199,7 +203,9 @@
                                   "cclsh: -c requires an argument~%")
                           (quit 2))))
                    ((string= argument "--version")
-                    (format t "cclsh ~a (~a ~a)~%" *cclsh-version*
+                    (format t "cclsh ~a~@[ (~a)~] (~a ~a)~%"
+                            *cclsh-version*
+                            *cclsh-build-commit*
                             (lisp-implementation-type)
                             (lisp-implementation-version))
                     (quit 0))
