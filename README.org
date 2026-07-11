@@ -8,11 +8,12 @@ Unix command or a Lisp form, evaluated in a live CCL image.
 
 - Clozure CL (=ccl= in PATH)
 - starship (prompt rendering, with a plain fallback when missing)
-- stty (raw terminal switching, part of coreutils)
+- Linux (terminal control talks to libc termios/ioctl directly)
 
 The shell code itself has zero dependencies beyond CCL and ASDF. When
 =~/quicklisp/setup.lisp= exists at build time, Quicklisp is baked into
-the produced image so =(ql:quickload ...)= works out of the box.
+the produced image so =(ql:quickload ...)= works out of the box; in an
+image built without it, =(quicklisp-setup)= loads or installs it.
 
 * Building
 
@@ -40,6 +41,9 @@ This produces a standalone =cclsh= binary in the repository root via
 - Unbalanced Lisp forms continue on the next line.
 - =~/.config/cclsh/startup.lisp= is loaded on startup, history persists
   in =~/.config/cclsh/history= (=XDG_CONFIG_HOME= is respected).
+- External commands run as the terminal's foreground process group, so
+  interactive programs work and Ctrl-C reaches the child, not the
+  shell. Errors and Ctrl-C never drop you into the CCL debugger.
 
 * Lisp helpers
 
