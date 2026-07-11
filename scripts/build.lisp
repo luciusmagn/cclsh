@@ -20,7 +20,10 @@
 
 (setf ccl:*terminal-character-encoding-name* ':utf-8)
 
+;; Save under a temporary name; scripts/build renames it into place so
+;; an interrupted build can never truncate a binary that might be
+;; someone's login shell.
 (format t "Saving cclsh executable...~%")
-(ccl:save-application "cclsh"
+(ccl:save-application "cclsh.new"
                       :toplevel-function #'cclsh:shell-toplevel
                       :prepend-kernel t)

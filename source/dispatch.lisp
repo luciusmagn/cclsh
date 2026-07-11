@@ -63,6 +63,9 @@
     (setf *last-status*
           (cond ((zerop (length trimmed))
                  *last-status*)
+                ((and (>= (length trimmed) 2)
+                      (string= "#!" trimmed :end2 2))
+                 *last-status*)
                 ((line-lisp-p trimmed)
                  (dispatch-lisp line))
                 (t

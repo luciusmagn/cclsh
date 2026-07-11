@@ -1,4 +1,5 @@
 /cclsh
+/cclsh.new
 *.lx64fsl
 *.lx32fsl
 *.dx64fsl

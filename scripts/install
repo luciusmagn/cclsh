@@ -1,0 +1,12 @@
+#!/bin/sh
+# Build cclsh and install a real copy (not a symlink) into ~/.local/bin
+# atomically. A login shell in /etc/passwd should point at this copy:
+# the repository binary is gitignored and one git clean -fdx away from
+# disappearing.
+set -e
+cd "$(dirname "$0")/.."
+scripts/build
+mkdir -p "$HOME/.local/bin"
+cp cclsh "$HOME/.local/bin/cclsh.new"
+mv -f "$HOME/.local/bin/cclsh.new" "$HOME/.local/bin/cclsh"
+echo "Installed $HOME/.local/bin/cclsh"

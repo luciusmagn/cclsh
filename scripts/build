@@ -1,4 +1,9 @@
 #!/bin/sh
+# Build the cclsh binary atomically: save-application writes cclsh.new
+# and the rename below is atomic, so ./cclsh is always a complete
+# executable even if a build is interrupted.
 set -e
 cd "$(dirname "$0")/.."
-exec ccl -n -b -l scripts/build.lisp
+ccl -n -b -l scripts/build.lisp
+mv -f cclsh.new cclsh
+echo "Built ./cclsh"

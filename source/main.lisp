@@ -1,9 +1,16 @@
 ;;;; -- Main loop --
 ;;;
 ;;; Startup, the read loop with Lisp continuation lines, and the entry
-;;; points for a REPL session and the saved application.
+;;; points for a REPL session and the saved application. The saved
+;;; application is written to survive login shell duty: -c is handled
+;;; for ssh, scp, rsync and git, unknown flags are ignored instead of
+;;; refusing to start, a broken startup file or history never prevents
+;;; a prompt, and CCLSH_SAFE=1 skips user state entirely.
 
 (in-package #:cclsh)
+
+(defparameter *cclsh-version* "1.0.0"
+  "The cclsh version reported by --version.")
 
 (defun terminal-encoding-setup ()
   "Switch the terminal streams to UTF-8."
@@ -38,6 +45,11 @@
           (dispatch-report-error condition)))))
   (values))
 
+(defun shell-safe-mode-p ()
+  "True when CCLSH_SAFE is set, which skips startup.lisp and history."
+  (let ((value (getenv "CCLSH_SAFE")))
+    (and value (plusp (length value)) t)))
+
 
 ;;; Reading complete inputs
 
@@ -47,6 +59,7 @@
   (multiple-value-bind (rows columns)
       (terminal-size)
     (declare (ignore rows))
+    (terminal-fresh-line)
     (let ((prompt (prompt-render *last-status* duration-milliseconds columns)))
       (multiple-value-bind (line kind)
           (edit-line prompt)
@@ -88,42 +101,143 @@
 ;;; Entry points
 
 (defun main ()
-  "Run the shell until exit or end of input."
+  "Run the shell until exit or end of input. Iteration errors are
+   reported and survived; only a long unbroken run of failures makes
+   the shell give up, so a login session is never lost to one bad
+   prompt render or a flaky read."
   (terminal-encoding-setup)
   (terminal-signals-setup)
   (environment-setup)
-  (history-load)
-  (let ((*package*   (find-package '#:cclsh-user))
-        (interactive (terminal-tty-p))
-        (duration    0))
-    (startup-load)
-    (loop
-      (catch 'cclsh-toplevel
-        (let ((*break-hook* (lambda (&rest arguments)
-                              (declare (ignore arguments))
-                              (throw 'cclsh-toplevel nil))))
-          (multiple-value-bind (line kind)
-              (if interactive
-                  (shell-read-interactive duration)
-                  (shell-read-plain))
-            (ecase kind
-              (:eof
-               (quit *last-status*))
-              (:abort
-               (setf *last-status* 130))
-              (:line
-               (when interactive
-                 (history-append line))
-               (let ((started (get-internal-real-time)))
-                 (dispatch-line line)
-                 (setf duration
-                       (round (* 1000 (- (get-internal-real-time) started))
-                              internal-time-units-per-second)))))))))))
+  (let ((safe (shell-safe-mode-p)))
+    (unless safe
+      (history-load))
+    (let ((*package*   (find-package '#:cclsh-user))
+          (interactive (terminal-tty-p))
+          (duration    0)
+          (failures    0))
+      (unless safe
+        (startup-load))
+      (loop
+        (catch 'cclsh-toplevel
+          (handler-case
+              (let ((*break-hook* (lambda (&rest arguments)
+                                    (declare (ignore arguments))
+                                    (throw 'cclsh-toplevel nil))))
+                (multiple-value-bind (line kind)
+                    (if interactive
+                        (shell-read-interactive duration)
+                        (shell-read-plain))
+                  (ecase kind
+                    (:eof
+                     (quit *last-status*))
+                    (:abort
+                     (setf *last-status* 130))
+                    (:line
+                     (when interactive
+                       (history-append line))
+                     (let ((started (get-internal-real-time)))
+                       (dispatch-line line)
+                       (setf duration
+                             (round (* 1000 (- (get-internal-real-time)
+                                               started))
+                                    internal-time-units-per-second))))))
+                (setf failures 0))
+            (serious-condition (condition)
+              (terminal-restore)
+              (dispatch-report-error condition)
+              (incf failures)
+              (when (>= failures 25)
+                (format *error-output*
+                        "cclsh: too many consecutive errors, giving up~%")
+                (quit 70)))))))))
+
+
+;;; Command line arguments
+
+(defun shell--execute-command-string (command)
+  "Run COMMAND as one shell input and exit with its status. This is
+   the -c mode used by ssh, scp, rsync, git and $SHELL callers. It
+   skips startup.lisp and history so user state can never break remote
+   access."
+  (terminal-encoding-setup)
+  (terminal-signals-setup)
+  (environment-setup)
+  (let ((*package* (find-package '#:cclsh-user)))
+    (dispatch-line command))
+  (quit *last-status*))
+
+(defun shell--run-script (path)
+  "Run the file at PATH as a cclsh script and exit with the last
+   status. Like -c, scripts load no user state; this is also the
+   shebang entry point since the kernel passes the script path as the
+   first argument."
+  (terminal-encoding-setup)
+  (terminal-signals-setup)
+  (environment-setup)
+  (let ((*package* (find-package '#:cclsh-user)))
+    (handler-case
+        (with-open-file (stream path :direction :input)
+          (let ((*standard-input* stream))
+            (loop
+              (multiple-value-bind (line kind)
+                  (shell-read-plain)
+                (when (eq kind ':eof)
+                  (return))
+                (dispatch-line line)))))
+      (error (condition)
+        (dispatch-report-error condition)
+        (quit 127))))
+  (quit *last-status*))
+
+(defun shell--process-arguments (arguments)
+  "Handle command line ARGUMENTS. Returns only when the shell should
+   start its normal read loop; -c, --version, --help and script files
+   exit the process themselves. Unknown flags are deliberately ignored
+   so an exotic login invocation can never lock anyone out."
+  (loop with remaining = arguments
+        while remaining
+        do (let ((argument (pop remaining)))
+             (cond ((string= argument "-c")
+                    (if remaining
+                        (shell--execute-command-string (pop remaining))
+                        (progn
+                          (format *error-output*
+                                  "cclsh: -c requires an argument~%")
+                          (quit 2))))
+                   ((string= argument "--version")
+                    (format t "cclsh ~a (~a ~a)~%" *cclsh-version*
+                            (lisp-implementation-type)
+                            (lisp-implementation-version))
+                    (quit 0))
+                   ((string= argument "--help")
+                    (format t "usage: cclsh [-c command] [script] ~
+                               [--version] [--help]~%")
+                    (quit 0))
+                   ((string= argument "--")
+                    nil)
+                   ((and (plusp (length argument))
+                         (char= (char argument 0) #\-))
+                    nil)
+                   (t
+                    (shell--run-script argument)))))
+  (values))
+
+(defun shell--executable-path ()
+  "Resolved path of the running executable, or NIL."
+  (ignore-errors
+    (namestring (truename "/proc/self/exe"))))
 
 (defun shell-toplevel ()
-  "Entry point for the saved cclsh application."
+  "Entry point for the saved cclsh application. Sets SHELL to the
+   running binary so $SHELL callers land back in cclsh; a REPL session
+   through MAIN leaves SHELL alone."
   (handler-case
-      (main)
+      (progn
+        (let ((executable (shell--executable-path)))
+          (when executable
+            (setenv "SHELL" executable)))
+        (shell--process-arguments (rest *command-line-argument-list*))
+        (main))
     (serious-condition (condition)
       (dispatch-report-error condition)
       (quit 70))))
