@@ -28,10 +28,13 @@
 
 (defun lex-command-line (line)
   "Lex LINE into :space, :word, :double-quote and :single-quote tokens.
-   Tokens cover the whole line and quote tokens include their quotes."
+   Tokens cover the whole line and quote tokens include their quotes.
+   Returns (values tokens open) where OPEN is the type of an
+   unterminated quote token, or NIL."
   (let ((tokens nil)
         (index  0)
-        (length (length line)))
+        (length (length line))
+        (open   nil))
     (labels ((emit (type start end)
                (push (token-make type start end) tokens))
 
@@ -43,15 +46,19 @@
 
              (scan-quoted (start quote type)
                (incf index)
-               (loop while (< index length)
-                     do (let ((char (char line index)))
-                          (cond ((and (char= quote #\") (char= char #\\))
-                                 (incf index (if (< (1+ index) length) 2 1)))
-                                ((char= char quote)
-                                 (incf index)
-                                 (return))
-                                (t
-                                 (incf index)))))
+               (let ((closed nil))
+                 (loop while (< index length)
+                       do (let ((char (char line index)))
+                            (cond ((and (char= quote #\") (char= char #\\))
+                                   (incf index (if (< (1+ index) length) 2 1)))
+                                  ((char= char quote)
+                                   (incf index)
+                                   (setf closed t)
+                                   (return))
+                                  (t
+                                   (incf index)))))
+                 (unless closed
+                   (setf open type)))
                (emit type start index))
 
              (scan-word (start)
@@ -77,7 +84,7 @@
                         (scan-quoted start #\' ':single-quote))
                        (t
                         (scan-word start)))))
-      (nreverse tokens))))
+      (values (nreverse tokens) open))))
 
 
 ;;; Lisp mode
@@ -206,3 +213,48 @@
                            (:paren-open  1)
                            (:paren-close -1)
                            (t            0)))))))
+
+
+;;; Complete inputs
+
+(defun line-lisp-p (line)
+  "True when LINE should be treated as a Lisp form."
+  (let ((start (position-if-not #'whitespace-char-p line)))
+    (and start (char= (char line start) #\() t)))
+
+(defun line-trailing-backslash-p (line)
+  "True when LINE ends in an odd run of backslashes, which continues a
+   command line sh style."
+  (oddp (loop for index downfrom (1- (length line)) to 0
+              while (char= (char line index) #\\)
+              count 1)))
+
+(defun command-line-open-p (line)
+  "True when a command mode LINE is unfinished: an open quote or a
+   trailing backslash."
+  (multiple-value-bind (tokens open)
+      (lex-command-line line)
+    (declare (ignore tokens))
+    (or (not (null open))
+        (line-trailing-backslash-p line))))
+
+(defun input-line-open-p (line)
+  "True when LINE is an unfinished input that should continue on the
+   next line: an unbalanced Lisp form, an open string in either mode,
+   or a trailing backslash."
+  (if (line-lisp-p line)
+      (lisp-line-open-p line)
+      (command-line-open-p line)))
+
+(defun input-line-join (line continuation)
+  "Join a CONTINUATION line onto LINE. A trailing backslash
+   continuation removes the backslash and joins directly, sh style;
+   open strings and Lisp forms keep the newline."
+  (if (and (not (line-lisp-p line))
+           (multiple-value-bind (tokens open)
+               (lex-command-line line)
+             (declare (ignore tokens))
+             (and (null open)
+                  (line-trailing-backslash-p line))))
+      (concatenate 'string (subseq line 0 (1- (length line))) continuation)
+      (concatenate 'string line (string #\newline) continuation)))

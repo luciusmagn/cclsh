@@ -66,17 +66,14 @@
         (if (not (eq kind ':line))
             (values line kind)
             (let ((accumulated line))
-              (loop while (and (line-lisp-p accumulated)
-                               (lisp-line-open-p accumulated))
+              (loop while (input-line-open-p accumulated)
                     do (multiple-value-bind (continuation continuation-kind)
                            (edit-line (ansi-colorize "... " ':bright-black))
                          (unless (eq continuation-kind ':line)
                            (return-from shell-read-interactive
                              (values nil ':abort)))
                          (setf accumulated
-                               (concatenate 'string accumulated
-                                            (string #\newline)
-                                            continuation))))
+                               (input-line-join accumulated continuation))))
               (values accumulated ':line)))))))
 
 (defun shell-read-plain ()
@@ -86,15 +83,12 @@
     (if (null line)
         (values nil ':eof)
         (let ((accumulated line))
-          (loop while (and (line-lisp-p accumulated)
-                           (lisp-line-open-p accumulated))
+          (loop while (input-line-open-p accumulated)
                 do (let ((continuation (read-line *standard-input* nil nil)))
                      (when (null continuation)
                        (return))
                      (setf accumulated
-                           (concatenate 'string accumulated
-                                        (string #\newline)
-                                        continuation))))
+                           (input-line-join accumulated continuation))))
           (values accumulated ':line)))))
 
 
