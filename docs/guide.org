@@ -92,8 +92,15 @@ Details worth knowing:
 
 - =*=, =**= and =***= hold the last three primary values, as in a REPL.
 - =cclsh:*last-status*= holds the exit status of the last command.
-- An unfinished form continues on the next line under a =...= prompt;
-  history recalls it with newlines folded to spaces.
+- Unfinished input continues on the next line under a =...= prompt:
+  unbalanced Lisp forms, open strings in either mode, and a command
+  line ending in a backslash (sh style, the backslash joins the lines
+  directly). History recalls multi-line entries with newlines folded
+  to spaces.
+- Calling an undefined function is reported up front with close
+  suggestions: =(defparam *x* 1)= says =undefined function defparam,
+  did you mean defparameter?= and does not evaluate the arguments of a
+  call that cannot succeed.
 - Errors print in red and return you to the prompt. You are never
   dropped into the CCL debugger.
 - The evaluation package is =cclsh-user=, which uses =cl=, =ccl= and
@@ -166,6 +173,7 @@ like the first word of a command line, and stage arguments are
 evaluated Lisp expressions:
 
 #+begin_src lisp
+(cmd git "status")                    ; one command, mid-Lisp
 (pipe (ls "-la") (grep "lisp"))       ; ls -la | grep lisp
 (seq (make "clean") (make))           ; make clean ; make
 (all (make) (make "install"))         ; make && make install
@@ -174,6 +182,12 @@ evaluated Lisp expressions:
 (let ((pattern "defun"))
   (pipe (git "grep" pattern) (wc "-l")))
 #+end_src
+
+=cmd= is the single-command sibling of a pipe stage: the head resolves
+like the first word of a command line, the arguments are evaluated
+Lisp expressions (so variables work; bare words do not), and the exit
+status comes back. =run= is its function counterpart when the program
+name itself is computed.
 
 Each returns the deciding exit status and records it in
 =*last-status*=. Builtin commands can appear inside =pipe= as well;
@@ -204,9 +218,14 @@ mode, including =:keywords=. A unique match inserts itself, several
 matches extend to their common prefix, and pressing Tab again lists
 the candidates.
 
-Input highlights as you type with the standard 16 terminal colors:
-external commands green, builtins cyan, unknown commands red, strings
-yellow; in Lisp mode keywords are magenta, numbers cyan, comments and
+Input highlights as you type with the standard 16 terminal colors.
+In command mode: external commands green, builtins cyan, unknown
+commands red, lone bound variables magenta, strings yellow, numbers
+cyan, =$VAR= references magenta, glob wildcards and a leading =~=
+bright magenta, backslash escapes dim. In Lisp mode: known operators
+in head position blue (a typo like =defparam= never lights up),
+keywords and quotes magenta, numbers, characters and constants cyan,
+bound =*earmuffed*= specials magenta, strings yellow, comments and
 parens dim.
 
 * History

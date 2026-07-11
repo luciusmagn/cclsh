@@ -41,7 +41,10 @@ This produces a standalone =cclsh= binary in the repository root via
   just prints its value.
 - =~=, =$VAR=, =${VAR}= and =*=/=?= globs expand in bare words. Quoting
   with ="..."= (variables expand) and ='...'= (literal) is supported.
-- Unbalanced Lisp forms continue on the next line.
+- Unfinished input continues on the next line: unbalanced Lisp forms,
+  open strings, and trailing backslashes.
+- Undefined functions are reported with suggestions before argument
+  evaluation can obscure them.
 - =~/.config/cclsh/startup.lisp= is loaded on startup, history persists
   in =~/.config/cclsh/history= (=XDG_CONFIG_HOME= is respected).
 - External commands run as the terminal's foreground process group, so
@@ -58,6 +61,7 @@ This produces a standalone =cclsh= binary in the repository root via
 
 #+begin_src lisp
 ;; Pipelines, sequencing, and conditional chains
+(cmd git "status")                ; one command, mid-Lisp
 (pipe (ls "-la") (grep "lisp"))   ; ls -la | grep lisp
 (seq (make "clean") (make))       ; make clean ; make
 (all (make) (make "install"))     ; make && make install
