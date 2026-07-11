@@ -18,6 +18,6 @@
                  (:file "complete" :depends-on ("lexer" "command" "expand" "highlight"))
                  (:file "builtins" :depends-on ("command" "expand" "terminal" "history" "complete"))
                  (:file "line-editor" :depends-on ("terminal" "lexer" "highlight" "history" "prompt" "complete"))
-                 (:file "dispatch" :depends-on ("command" "expand" "lexer" "highlight"))
+                 (:file "dispatch" :depends-on ("command" "expand" "lexer" "highlight" "complete"))
                  (:file "main"     :depends-on ("dispatch" "line-editor" "prompt" "builtins" "pipeline")))))
   :description "A system shell running inside Clozure CL")

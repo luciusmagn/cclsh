@@ -14,6 +14,37 @@
   (force-output *error-output*)
   (values))
 
+(defun dispatch--undefined-function-hint (form)
+  "When FORM is a call whose head symbol names no function, macro or
+   special operator, report it with close completions and return true.
+   The form is then not evaluated: argument evaluation would surface a
+   less useful error first, and would run side effects for a call that
+   cannot succeed."
+  (let ((head (and (consp form) (first form))))
+    (when (and head
+               (symbolp head)
+               (not (special-operator-p head))
+               (not (macro-function head))
+               (not (fboundp head)))
+      (let ((candidates
+              (remove-if-not
+               (lambda (name)
+                 (multiple-value-bind (symbol found)
+                     (find-symbol (string-upcase name) *package*)
+                   (and found (fboundp symbol))))
+               (completion--symbols (string-downcase (symbol-name head))))))
+        (format *error-output* "~a~%"
+                (ansi-colorize
+                 (format nil "cclsh: undefined function ~(~a~)~
+                              ~@[, did you mean ~{~a~^, ~}?~]"
+                         head
+                         (and candidates
+                              (subseq candidates
+                                      0 (min 3 (length candidates)))))
+                 ':red))
+        (force-output *error-output*))
+      t)))
+
 (defun dispatch-lisp (line)
   "Evaluate LINE as Lisp forms, print the values REPL style and update
    the * ** *** variables. Returns an exit status."
@@ -26,6 +57,8 @@
             (when (eq form eof)
               (return 0))
             (setf position next)
+            (when (dispatch--undefined-function-hint form)
+              (return 1))
             (let ((values (multiple-value-list (eval form))))
               (setf *** **
                     **  *
