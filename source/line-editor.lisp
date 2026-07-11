@@ -75,6 +75,7 @@
              (5   ':end)           ; C-e
              (6   ':right)         ; C-f
              (8   ':backspace)     ; C-h
+             (9   ':complete)      ; Tab
              (10  ':enter)
              (11  ':kill-to-end)   ; C-k
              (12  ':clear-screen)  ; C-l
@@ -144,6 +145,70 @@
 (defun editor--history-entry (history index)
   "History entry at INDEX with newlines folded to spaces for editing."
   (substitute #\space #\newline (aref history index)))
+
+
+;;; Completion presentation
+
+(defun editor--print-candidates (displays columns)
+  "Print completion DISPLAYS in columns under the edit line."
+  (let ((count (length displays)))
+    (if (> count 120)
+        (format t "(~d possibilities)~%" count)
+        (let* ((width   (+ 2 (loop for display in displays
+                                   maximize (length display))))
+               (per-row (max 1 (floor columns width))))
+          (loop for index from 1
+                for display in displays
+                do (format t "~va" width display)
+                when (zerop (mod index per-row))
+                  do (write-char #\Linefeed)
+                finally (unless (zerop (mod count per-row))
+                          (write-char #\Linefeed))))))
+  (force-output))
+
+(defun editor--complete (buffer cursor edit-prompt prompt-width columns
+                         previous-row)
+  "Apply Tab completion at CURSOR. A unique match inserts itself (plus
+   a space unless it is a directory), several matches extend to their
+   common prefix, and a repeated Tab prints the candidate list below
+   the line. Returns (values buffer cursor previous-row)."
+  (multiple-value-bind (start candidates displays)
+      (complete-line buffer cursor)
+    (cond ((null candidates)
+           (write-char (code-char 7))
+           (force-output)
+           (values buffer cursor previous-row))
+          ((null (rest candidates))
+           (let* ((candidate   (first candidates))
+                  (directory-p (and (plusp (length candidate))
+                                    (char= (char candidate
+                                                 (1- (length candidate)))
+                                           #\/)))
+                  (replacement (if directory-p
+                                   candidate
+                                   (concatenate 'string candidate " "))))
+             (values (concatenate 'string
+                                  (subseq buffer 0 start)
+                                  replacement
+                                  (subseq buffer cursor))
+                     (+ start (length replacement))
+                     previous-row)))
+          (t
+           (let ((common        (completion--common-prefix candidates))
+                 (prefix-length (- cursor start)))
+             (if (> (length common) prefix-length)
+                 (values (concatenate 'string
+                                      (subseq buffer 0 start)
+                                      common
+                                      (subseq buffer cursor))
+                         (+ start (length common))
+                         previous-row)
+                 (progn
+                   (editor--render edit-prompt prompt-width buffer
+                                   (length buffer) columns previous-row)
+                   (write-char #\Linefeed)
+                   (editor--print-candidates displays columns)
+                   (values buffer cursor 0))))))))
 
 (defun edit-line (prompt &key (history *history*))
   "Edit one line under PROMPT. Returns (values line kind) where KIND is
@@ -252,6 +317,10 @@
                                  stash
                                  (editor--history-entry history history-index)))
                        (setf cursor (length buffer))))
+                    (:complete
+                     (multiple-value-setq (buffer cursor previous-row)
+                       (editor--complete buffer cursor edit-prompt
+                                         prompt-width columns previous-row)))
                     (:clear-screen
                      (write-string (ansi-clear-screen))
                      (write-string preamble)

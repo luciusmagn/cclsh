@@ -14,6 +14,13 @@
 (defvar *path-cache-source* nil
   "The PATH value *PATH-CACHE* was built against.")
 
+(defvar *path-command-names* nil
+  "Cached sorted list of executable names found in PATH, for
+   completion.")
+
+(defvar *path-command-names-source* nil
+  "The PATH value *PATH-COMMAND-NAMES* was built against.")
+
 
 ;;; Conditions
 
@@ -104,6 +111,14 @@
 
 ;;; Resolution
 
+(defun path-command-names-note (name)
+  "Record NAME in the completion name cache after a fresh PATH hit."
+  (when (and *path-command-names*
+             (not (member name *path-command-names* :test #'string=)))
+    (setf *path-command-names*
+          (merge 'list (list name) *path-command-names* #'string<)))
+  (values))
+
 (defun command-resolve (word)
   "Resolve WORD to a runnable command.
    Returns (values :builtin command), (values :external path) or
@@ -124,6 +139,26 @@
                  (if path
                      (values ':external path)
                      (values ':unknown nil))))))))
+
+(defun command-resolve-fresh (word)
+  "Resolve WORD like COMMAND-RESOLVE, but retry a PATH miss with a
+   fresh filesystem scan. Highlighting caches a miss for every prefix
+   typed, so a program installed after the cache was built would stay
+   invisible until REHASH; execution paths use this instead and pay
+   the rescan only when the cache says no. A fresh hit backfills the
+   lookup and completion caches."
+  (multiple-value-bind (kind target)
+      (command-resolve word)
+    (if (and (eq kind ':unknown)
+             (not (find #\/ word)))
+        (let ((found (path--search-uncached word)))
+          (if found
+              (progn
+                (setf (gethash word *path-cache*) found)
+                (path-command-names-note word)
+                (values ':external found))
+              (values ':unknown nil)))
+        (values kind target))))
 
 
 ;;; Execution
@@ -193,7 +228,7 @@
   (let ((name  (command-designator-name program))
         (words (mapcar #'princ-to-string arguments)))
     (multiple-value-bind (kind target)
-        (command-resolve name)
+        (command-resolve-fresh name)
       (setf *last-status*
             (ecase kind
               (:builtin  (command-execute-builtin target words))

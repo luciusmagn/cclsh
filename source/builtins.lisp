@@ -56,9 +56,11 @@
     (quit code)))
 
 (defcommand rehash ()
-  "Forget cached PATH lookups."
+  "Forget cached PATH lookups and completion candidates."
   (clrhash *path-cache*)
   (setf *path-cache-source* nil)
+  (setf *path-command-names* nil)
+  (setf *path-command-names-source* nil)
   0)
 
 (defcommand commands ()
