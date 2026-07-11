@@ -24,6 +24,7 @@
            #:command-documentation
            #:defcommand
            #:run
+           #:cmd
            #:pipe
            #:seq
            #:all
@@ -49,6 +50,7 @@
   (:use #:cl #:ccl #:cclsh)
   (:shadowing-import-from #:cclsh
                           #:run
+                          #:cmd
                           #:pipe
                           #:seq
                           #:all

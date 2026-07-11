@@ -29,6 +29,14 @@
    Returns the exit status of the last stage."
   `(pipeline-run (list ,@(mapcar #'pipeline--stage-form stages))))
 
+(defmacro cmd (name &rest arguments)
+  "Run one command from the middle of Lisp code: (cmd git \"status\").
+   NAME resolves like the first word of a command line and ARGUMENTS
+   are evaluated Lisp expressions, stringified like pipe stages.
+   Returns the exit status."
+  `(stage-sequence-run (list ,(pipeline--stage-form (list* name arguments)))
+                       ':always))
+
 (defmacro seq (&rest stages)
   "Run STAGES in order regardless of exit statuses, like cmd1; cmd2.
    Returns the exit status of the last stage."
