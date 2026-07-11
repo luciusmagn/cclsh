@@ -8,14 +8,14 @@
                 #:external-process-id
                 #:external-process-input-stream
                 #:external-process-output-stream
-                #:getenv
-                #:setenv
                 #:current-directory
                 #:quit
                 #:process-run-function
                 #:make-external-format
                 #:external-call
-                #:*break-hook*)
+                #:*break-hook*
+                #:*command-line-argument-list*)
+  (:shadow #:export)
   (:export #:main
            #:shell-toplevel
            #:command
@@ -33,6 +33,12 @@
            #:exit
            #:rehash
            #:commands
+           #:export
+           #:unset
+           #:getenv
+           #:setenv
+           #:env
+           #:environment-variables
            #:config-directory
            #:quicklisp-setup
            #:shell-error
@@ -51,6 +57,10 @@
                           #:exit
                           #:rehash
                           #:commands
+                          #:export
+                          #:unset
+                          #:getenv
+                          #:setenv
                           #:command
                           #:defcommand)
   (:documentation "The package command lines and startup.lisp are evaluated in."))

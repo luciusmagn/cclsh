@@ -85,6 +85,34 @@
   0)
 
 
+;;; Environment
+
+(defcommand export (&rest assignments)
+  "Set environment variables: export NAME=value... A bare NAME prints
+   its current value; no arguments print the whole environment."
+  (if (null assignments)
+      (dolist (entry (environment-variables))
+        (format t "~a~%" entry))
+      (dolist (assignment assignments)
+        (let ((split (position #\= assignment)))
+          (if split
+              (setenv (subseq assignment 0 split)
+                      (subseq assignment (1+ split)))
+              (let ((value (getenv assignment)))
+                (if value
+                    (format t "~a=~a~%" assignment value)
+                    (format *error-output* "export: ~a is unset~%"
+                            assignment)))))))
+  0)
+
+(defcommand unset (&rest names)
+  "Remove environment variables. Names are symbols or strings."
+  (dolist (name names)
+    (ccl:with-cstrs ((pointer (environment-name name)))
+      (external-call "unsetenv" :address pointer :int)))
+  0)
+
+
 ;;; Quicklisp
 
 (defun quicklisp-setup ()

@@ -1,18 +1,19 @@
 (defsystem "cclsh"
-  :version "0.1.0"
+  :version "1.0.0"
   :author "Lukáš Hozda"
   :license "Private"
   :depends-on ()
   :components ((:module "source"
                 :components
                 ((:file "package")
+                 (:file "environment" :depends-on ("package"))
                  (:file "terminal" :depends-on ("package"))
                  (:file "lexer"    :depends-on ("package"))
-                 (:file "command"  :depends-on ("package"))
-                 (:file "expand"   :depends-on ("lexer" "command"))
+                 (:file "command"  :depends-on ("package" "environment"))
+                 (:file "expand"   :depends-on ("lexer" "command" "environment"))
                  (:file "highlight" :depends-on ("terminal" "lexer" "command" "expand"))
-                 (:file "history"  :depends-on ("lexer"))
-                 (:file "prompt"   :depends-on ("terminal" "command" "expand"))
+                 (:file "history"  :depends-on ("lexer" "environment"))
+                 (:file "prompt"   :depends-on ("terminal" "command" "expand" "environment"))
                  (:file "pipeline" :depends-on ("command"))
                  (:file "builtins" :depends-on ("command" "expand" "terminal" "history"))
                  (:file "line-editor" :depends-on ("terminal" "lexer" "highlight" "history" "prompt"))
