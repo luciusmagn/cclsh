@@ -44,6 +44,12 @@ This produces a standalone =cclsh= binary in the repository root via
 - External commands run as the terminal's foreground process group, so
   interactive programs work and Ctrl-C reaches the child, not the
   shell. Errors and Ctrl-C never drop you into the CCL debugger.
+- =cclsh -c command=, script files and shebang scripts run without
+  user state, which keeps ssh, scp, rsync and git working when cclsh
+  is a login shell. =CCLSH_SAFE=1= skips startup.lisp and history.
+- Environment variables are lispy: =(setenv 'editor "vim")=,
+  =(getenv :home)=, =(setf (env 'port) 8000)=, plus =export= and
+  =unset= builtins.
 
 * Lisp helpers
 
@@ -67,15 +73,18 @@ This produces a standalone =cclsh= binary in the repository root via
 
 * Line editor
 
-Arrow keys navigate history and the cursor. Supported keys: C-a/C-e
+Arrow keys navigate history and the cursor. Tab completes command
+names, file paths and Lisp symbols. Supported keys: C-a/C-e
 (home/end), C-k/C-u (kill to end/whole line), C-w (kill word), C-l
 (clear screen), C-d (EOF on an empty line), C-c (abort line). Input is
 highlighted with the standard 16 terminal colors: known commands green,
 builtins cyan, unknown commands red, strings yellow, comments and parens
-dim, keywords magenta, numbers cyan.
+dim, keywords magenta, numbers cyan. Output that ends without a newline
+gets a reverse video ⏎ marker, fish style. See =docs/guide.org= for the
+full guide, including login shell setup.
 
 * Not yet
 
-Job control (bg/fg/C-z), tab completion, redirection syntax in command
-mode, and a right-side prompt. Multi-line history entries are recalled
+Job control (bg/fg/C-z), redirection syntax in command mode, script
+argv, and a right-side prompt. Multi-line history entries are recalled
 with newlines folded to spaces.

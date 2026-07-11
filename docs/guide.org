@@ -1,0 +1,333 @@
+#+TITLE: cclsh guide
+#+AUTHOR: Lukáš Hozda
+
+cclsh is a system shell running inside a live Clozure CL image. Every
+line you type is either a Unix command or a Lisp form, and the boundary
+between the two is deliberately thin: shell commands are resolvable
+Lisp objects, and Lisp code can orchestrate processes with pipeline
+helpers.
+
+* Installation
+
+#+begin_src sh
+cd ~/common-lisp/cclsh
+scripts/install     # builds and installs a copy to ~/.local/bin/cclsh
+#+end_src
+
+=scripts/build= alone produces =./cclsh= in the repository. Both are
+atomic: the binary is written under a temporary name and renamed, so
+an interrupted build never leaves a truncated executable behind. The
+build bakes Quicklisp into the image when =~/quicklisp/setup.lisp=
+exists. You can also run the shell from any CCL REPL:
+
+#+begin_src lisp
+(asdf:load-system "cclsh")
+(cclsh:main)
+#+end_src
+
+* How a line is interpreted
+
+When you press Enter, cclsh looks at the line:
+
+1. If it starts with =(= (ignoring whitespace), it is read and
+   evaluated as Lisp in the =cclsh-user= package. Values print one per
+   line, REPL style.
+2. Otherwise it is a command line. The first word resolves in order:
+   - a word containing =/= is executed as a file path directly,
+   - a symbol in the current package whose value is a =command=
+     instance runs as a builtin,
+   - otherwise the word is looked up in =PATH=.
+3. Nothing found means a red =command not found= and status 127.
+
+Because only symbols bound to =command= instances count, ordinary Lisp
+bindings never shadow programs: typing =time= runs =/bin/time=, not the
+CL macro.
+
+PATH lookups are cached for highlighting speed, but execution never
+trusts a cached miss: a freshly installed program runs immediately
+even while the highlighter still shows it red, and the first
+successful run updates the caches (=rehash= drops them wholesale).
+
+* Command mode
+
+Words are split on whitespace with shell-like quoting and expansion:
+
+| Syntax        | Meaning                                                 |
+|---------------+---------------------------------------------------------|
+| =~=, =~/x=    | home directory (only at the start of a bare word)       |
+| =$VAR=        | environment variable, empty when unset                  |
+| =${VAR}=      | same, with explicit braces                              |
+| =*=, =?=      | glob against the filesystem, per path segment           |
+| ="..."=       | one word, =$VAR= still expands inside                   |
+| ='...'=       | one word, everything literal                            |
+| =\x=          | escape: =\ = joins words, =\*= is a literal star        |
+
+Details worth knowing:
+
+- Adjacent pieces concatenate into one argument: =pre"mid dle"post= is
+  the single word =premid dlepost=.
+- Hidden files only match globs that spell out the dot: =*= skips
+  =.hidden=, =.h*= finds it.
+- A glob with no matches passes through unchanged, so =echo *.zip= in
+  a zipless directory prints =*.zip=.
+- Globs apply only to whole bare words, not to quoted concatenations.
+- There is no =|=, =>= or =<= syntax. A =|= in command mode is passed
+  to the program as a literal argument. Pipelines are Lisp forms, see
+  below.
+
+* Lisp mode
+
+#+begin_src lisp
+(+ 1 2)                     ; prints 3
+(defvar my-projects "~/common-lisp")
+(ccl:getenv "HOME")         ; full CCL is at your fingertips
+#+end_src
+
+- =*=, =**= and =***= hold the last three primary values, as in a REPL.
+- =cclsh:*last-status*= holds the exit status of the last command.
+- An unfinished form continues on the next line under a =...= prompt;
+  history recalls it with newlines folded to spaces.
+- Errors print in red and return you to the prompt. You are never
+  dropped into the CCL debugger.
+- The evaluation package is =cclsh-user=, which uses =cl=, =ccl= and
+  =cclsh=.
+
+When a form's output does not end in a newline, cclsh prints a reverse
+video =⏎= marker before the value, the same way fish marks partial
+lines: =(format t "hello")= shows =hello⏎= and then =NIL= on a fresh
+line. The prompt applies the same rule after commands like
+=printf hi=.
+
+* Environment variables
+
+#+begin_src sh
+export EDITOR=vim PAGER=less     # set, several at a time
+export PATH=$HOME/bin:$PATH      # expansions work in the value
+export EDITOR                    # print one value
+export                           # print the whole environment
+unset PAGER
+#+end_src
+
+From Lisp, names are designators: symbols, keywords and strings all
+work, and non-string values are stringified:
+
+#+begin_src lisp
+(setenv 'editor "vim")        ; reader upcases: sets EDITOR
+(getenv :home)                ; "/home/mag"
+(setf (env 'port) 8000)       ; ENV is a setf-able accessor
+(env 'port)                   ; "8000"
+(unset 'port)
+(environment-variables)       ; live list of NAME=value strings
+#+end_src
+
+Lowercase variable names like =http_proxy= need strings. Note that =~=
+does not expand after === in command mode, use =$HOME= in values
+instead. In =cclsh-user=, =export= designates the shell command; use
+=cl:export= for the package operator.
+
+* Defining your own commands
+
+=defcommand= creates a command callable both from the command line and
+from Lisp as an ordinary function:
+
+#+begin_src lisp
+(defcommand gs ()
+  "Short git status."
+  (run "git" "status" "--short"))
+
+(defcommand mkcd (directory)
+  "Create DIRECTORY and change into it."
+  (run "mkdir" "-p" directory)
+  (cd directory))
+#+end_src
+
+After that, =gs= at the prompt works, and so does =(gs)= or
+=(mkcd "/tmp/scratch")= inside Lisp code. A command's integer return
+value becomes its exit status; any other value means 0. =run= executes
+one program in the foreground and returns its exit status; arguments
+are stringified with =princ-to-string=, so numbers and pathnames are
+fine.
+
+Builtins that ship with the shell: =cd= (supports =-=, updates =PWD=
+and =OLDPWD=), =exit=, =export=, =unset=, =rehash= (drop cached =PATH=
+lookups and completions) and =commands= (list all defined commands).
+
+* Pipelines and sequencing
+
+Process orchestration is spelled in Lisp. Stage heads resolve exactly
+like the first word of a command line, and stage arguments are
+evaluated Lisp expressions:
+
+#+begin_src lisp
+(pipe (ls "-la") (grep "lisp"))       ; ls -la | grep lisp
+(seq (make "clean") (make))           ; make clean ; make
+(all (make) (make "install"))         ; make && make install
+(any (probe) (echo "fallback"))       ; probe || echo fallback
+
+(let ((pattern "defun"))
+  (pipe (git "grep" pattern) (wc "-l")))
+#+end_src
+
+Each returns the deciding exit status and records it in
+=*last-status*=. Builtin commands can appear inside =pipe= as well;
+their output is buffered and streamed to the next stage.
+
+* Line editing and completion
+
+| Key                 | Action                              |
+|---------------------+-------------------------------------|
+| Tab                 | complete commands, files or symbols |
+| Left/Right, C-b/C-f | move cursor                         |
+| Up/Down, C-p/C-n    | older/newer history entry           |
+| Home/End, C-a/C-e   | start/end of line                   |
+| Backspace, C-h      | delete backward                     |
+| Delete              | delete forward                      |
+| C-d on text         | delete forward                      |
+| C-d on empty line   | exit the shell                      |
+| C-w                 | delete word backward                |
+| C-k                 | kill to end of line                 |
+| C-u                 | discard the whole line              |
+| C-l                 | clear screen                        |
+| C-c                 | abort the current line              |
+
+Tab completes command names in command position (=PATH= executables
+plus defined commands), file paths elsewhere (directories complete
+with a trailing =/=, spaces get escaped), and Lisp symbols in Lisp
+mode, including =:keywords=. A unique match inserts itself, several
+matches extend to their common prefix, and pressing Tab again lists
+the candidates.
+
+Input highlights as you type with the standard 16 terminal colors:
+external commands green, builtins cyan, unknown commands red, strings
+yellow; in Lisp mode keywords are magenta, numbers cyan, comments and
+parens dim.
+
+* History
+
+History lives in =~/.config/cclsh/history= (=XDG_CONFIG_HOME= is
+respected), one printed string per line, capped at 10000 entries on
+load. Blank lines, aborted lines and immediate duplicates are not
+recorded. Piped (non-interactive) sessions read history but never
+write it.
+
+* Configuration
+
+=~/.config/cclsh/startup.lisp= loads on startup in =cclsh-user=. A
+broken startup file prints its error and the shell starts anyway.
+A reasonable starting point:
+
+#+begin_src lisp
+;; Environment
+(setenv "EDITOR" "vim")
+
+;; Aliases
+(defcommand la ()
+  "Long listing including hidden files."
+  (run "ls" "-la"))
+
+(defcommand gd ()
+  "Git diff."
+  (run "git" "diff"))
+
+;; Anything CCL can do is fair game
+(defcommand serve (&optional (port "8000"))
+  "Serve the current directory over HTTP."
+  (run "python3" "-m" "http.server" port))
+#+end_src
+
+* Quicklisp and scripting
+
+When the image was built with Quicklisp, =(ql:quickload :system)= works
+immediately, which makes the shell a decent scripting host:
+
+#+begin_src lisp
+(ql:quickload :dexador)
+(dex:get "https://example.com")
+#+end_src
+
+In an image built without it, =(quicklisp-setup)= loads an existing
+=~/quicklisp= or installs one with curl.
+
+Scripts run three ways, all skipping =startup.lisp= and history:
+
+#+begin_src sh
+cclsh -c 'echo one shot'      # one command string
+cclsh provision.cclsh         # a script file
+printf 'ls\n(+ 1 2)\nexit\n' | cclsh   # piped standard input
+#+end_src
+
+Script files also work as shebang interpreters:
+
+#+begin_src sh
+#!/home/mag/.local/bin/cclsh
+(format t "deploying~%")
+(all (make "build") (make "deploy"))
+#+end_src
+
+The process exit code is the shell's last status, or the argument of
+=exit=. Script arguments after the file name are ignored for now.
+
+* Using cclsh as your login shell
+
+cclsh is written to survive login shell duty, but change your login
+shell with the same care as always. What is in place:
+
+- =-c command= works, which is what sshd, scp, rsync, git over ssh and
+  =$SHELL= callers invoke. The string is interpreted with cclsh
+  semantics: plain =command arg...= lines (which is what scp, rsync
+  and git send) work as expected, but sh constructs like =&&= or =>=
+  in a =-c= string will not.
+- Unknown flags (=-l=, =-i=, ...) are ignored instead of refusing to
+  start, so exotic login invocations cannot lock you out.
+- A broken =startup.lisp= or history file prints its error and the
+  shell starts anyway, and =CCLSH_SAFE=1 cclsh= skips both entirely.
+- Read loop errors are survived; the shell only gives up after 25
+  consecutive failures rather than dying on the first hiccup.
+- Builds and installs are atomic, and the saved binary sets =SHELL= to
+  its own path so nested tools spawn cclsh.
+
+Recommendations, in order:
+
+1. Dogfood first without committing: run =cclsh= from fish, or set it
+   as your terminal emulator's command, for a few days.
+2. Point the login shell at =~/.local/bin/cclsh= (a real copy managed
+   by =scripts/install=), never at the repository binary, which is one
+   =git clean -fdx= away from disappearing.
+3. Keep =root= (or one other account) on a stock shell.
+4. As a login shell, nothing sources =/etc/profile= for you. Own your
+   environment at the top of =startup.lisp=:
+
+#+begin_src lisp
+(setenv "PATH" (format nil "~a/.local/bin:~a/.guix-home/profile/bin:~a/.guix-profile/bin:~a"
+                       (getenv "HOME") (getenv "HOME") (getenv "HOME")
+                       (getenv "PATH")))
+(setenv "GUIX_LOCPATH" (format nil "~a/.guix-profile/lib/locale" (getenv "HOME")))
+#+end_src
+
+On Guix System, set the shell declaratively in your =config.scm= user
+account (=chsh= needs the path listed in =/etc/shells= otherwise):
+
+#+begin_src scheme
+(user-account
+ (name "mag")
+ ;; ...
+ (shell "/home/mag/.local/bin/cclsh"))
+#+end_src
+
+To revert in an emergency: =ssh mag@host -t env CCLSH_SAFE=1
+/home/mag/.local/bin/cclsh= gets you a prompt past any broken user
+state, =chsh -s /run/current-system/profile/bin/fish= (or the Guix
+config change) restores fish, and a root TTY login works regardless.
+
+* Current limitations
+
+- No job control: no =bg=, =fg= or =jobs=, and Ctrl-Z will stop the
+  foreground child with no way to resume it from the shell (use
+  =kill -CONT= from elsewhere).
+- No redirection syntax in command mode; capture or redirect through
+  Lisp instead.
+- =-c= strings and scripts use cclsh syntax, not sh; complex remote
+  commands may need =sh -c= spelled explicitly.
+- Script arguments (argv for scripts) are not passed yet.
+- Multi-line history entries are recalled with newlines folded to
+  spaces, which matters if the original form contained =;= comments.
