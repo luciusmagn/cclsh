@@ -107,29 +107,47 @@
                      (get-output-stream-string buffer))))))))
 
 (defun pipeline-run (stages)
-  "Run resolved STAGES as a pipeline and return the last exit status."
-  (let ((resolved  (pipeline--resolve-stages stages))
-        (processes nil)
-        (status    0)
-        (carried   nil))
-    (loop for (kind target arguments) in resolved
-          for remaining on resolved
-          for last-stage-p = (null (rest remaining))
-          do (ecase kind
-               (:external
-                (multiple-value-bind (process output)
-                    (pipeline--spawn-external target arguments carried last-stage-p)
-                  (push process processes)
-                  (setf carried output)))
-               (:builtin
-                (multiple-value-bind (builtin-status output)
-                    (pipeline--run-builtin target arguments carried last-stage-p)
-                  (setf status builtin-status)
-                  (setf carried output)))))
-    (let ((exit-statuses (mapcar #'external-wait (nreverse processes))))
-      (when (and exit-statuses
-                 (eq (first (first (last resolved))) ':external))
-        (setf status (first (last exit-statuses)))))
+  "Run resolved STAGES as a pipeline and return the last exit status.
+   When the first stage is external it reads the terminal, so it gets
+   the terminal's foreground process group for the pipeline's duration;
+   later stages only touch pipes."
+  (let ((resolved     (pipeline--resolve-stages stages))
+        (interactive  (terminal-tty-p))
+        (shell-group  (terminal-own-process-group))
+        (processes    nil)
+        (status       0)
+        (carried      nil)
+        (stage-index  0)
+        (foreground-p nil))
+    (unwind-protect
+        (progn
+          (loop for (kind target arguments) in resolved
+                for remaining on resolved
+                for last-stage-p = (null (rest remaining))
+                do (ecase kind
+                     (:external
+                      (multiple-value-bind (process output)
+                          (pipeline--spawn-external target arguments carried
+                                                    last-stage-p)
+                        (when (and interactive (zerop stage-index))
+                          (terminal-foreground (external-process-id process))
+                          (process-group-continue (external-process-id process))
+                          (setf foreground-p t))
+                        (push process processes)
+                        (setf carried output)))
+                     (:builtin
+                      (multiple-value-bind (builtin-status output)
+                          (pipeline--run-builtin target arguments carried
+                                                 last-stage-p)
+                        (setf status builtin-status)
+                        (setf carried output))))
+                   (incf stage-index))
+          (let ((exit-statuses (mapcar #'external-wait (nreverse processes))))
+            (when (and exit-statuses
+                       (eq (first (first (last resolved))) ':external))
+              (setf status (first (last exit-statuses))))))
+      (when foreground-p
+        (terminal-foreground shell-group)))
     (setf *last-status* status)))
 
 (defun stage-sequence-run (stages mode)

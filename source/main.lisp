@@ -90,6 +90,7 @@
 (defun main ()
   "Run the shell until exit or end of input."
   (terminal-encoding-setup)
+  (terminal-signals-setup)
   (environment-setup)
   (history-load)
   (let ((*package*   (find-package '#:cclsh-user))

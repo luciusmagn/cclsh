@@ -1,16 +1,50 @@
 ;;;; -- Terminal control --
 ;;;
-;;; Raw mode switching through stty and ANSI escape sequence helpers.
-;;; No FFI: the terminal is configured by spawning stty against the
-;;; shell's controlling terminal.
+;;; In-process terminal control through libc: raw mode with tcgetattr
+;;; and tcsetattr, size with the TIOCGWINSZ ioctl, and foreground
+;;; process group handling with tcsetpgrp. CCL runs external programs
+;;; in their own process groups, so the shell must hand them the
+;;; terminal for the duration of a foreground command and take it back
+;;; afterwards; the byte offsets below follow the glibc termios layout
+;;; on Linux.
 
 (in-package #:cclsh)
 
 (defconstant +escape-character+ (code-char 27)
   "The ASCII escape character used in ANSI sequences.")
 
-(defvar *terminal-saved-state* nil
-  "Original stty state string, restored after raw line editing.")
+(defconstant +termios-size+ 128
+  "Buffer size comfortably larger than glibc's struct termios.")
+
+(defconstant +termios-lflag-offset+ 12
+  "Byte offset of c_lflag in struct termios.")
+
+(defconstant +termios-vtime-offset+ 22
+  "Byte offset of c_cc[VTIME] in struct termios.")
+
+(defconstant +termios-vmin-offset+ 23
+  "Byte offset of c_cc[VMIN] in struct termios.")
+
+(defconstant +termios-raw-lflag-mask+ #x0b
+  "The ISIG, ICANON and ECHO bits of c_lflag.")
+
+(defconstant +tcsanow+ 0
+  "tcsetattr optional action: apply immediately.")
+
+(defconstant +winsize-ioctl+ #x5413
+  "The TIOCGWINSZ ioctl request.")
+
+(defconstant +sigcont+ 18
+  "Signal number of SIGCONT.")
+
+(defconstant +sigttin+ 21
+  "Signal number of SIGTTIN.")
+
+(defconstant +sigttou+ 22
+  "Signal number of SIGTTOU.")
+
+(defvar *terminal-saved-termios* nil
+  "Saved termios bytes, restored after raw line editing.")
 
 (defparameter *ansi-color-codes*
   '((:black          . 30)
@@ -34,53 +68,81 @@
 
 ;;; Raw mode
 
-(defun terminal-run-stty (arguments)
-  "Run stty with ARGUMENTS against the shell's terminal.
-   Returns the trimmed standard output, or NIL when stty fails."
-  (handler-case
-      (let* ((output  (make-string-output-stream))
-             (process (run-program "stty" arguments
-                                   :input  t
-                                   :output output
-                                   :error  nil
-                                   :wait   t)))
-        (multiple-value-bind (status code)
-            (external-process-status process)
-          (if (and (eq status ':exited) (zerop code))
-              (string-trim '(#\space #\newline #\return)
-                           (get-output-stream-string output))
-              nil)))
-    (error () nil)))
-
 (defun terminal-tty-p ()
   "True when standard input is an interactive terminal."
-  (not (null (terminal-run-stty '("-g")))))
+  (= 1 (external-call "isatty" :int 0 :int)))
+
+(defun terminal--get-termios (pointer)
+  "Fill POINTER with the terminal attributes. Returns true on success."
+  (zerop (external-call "tcgetattr" :int 0 :address pointer :int)))
+
+(defun terminal--set-termios (pointer)
+  "Apply the terminal attributes at POINTER. Returns true on success."
+  (zerop (external-call "tcsetattr" :int 0 :int +tcsanow+ :address pointer :int)))
 
 (defun terminal-raw ()
-  "Switch the terminal to character-at-a-time input without echo.
-   Returns true when the switch succeeded."
-  (let ((saved (terminal-run-stty '("-g"))))
-    (when saved
-      (setf *terminal-saved-state* saved)
-      (terminal-run-stty '("-icanon" "-echo" "-isig" "min" "1" "time" "0"))
-      t)))
+  "Switch the terminal to character-at-a-time input without echo or
+   signal generation. Returns true when the switch succeeded."
+  (ccl:%stack-block ((pointer +termios-size+))
+    (when (terminal--get-termios pointer)
+      (let ((saved (make-array +termios-size+ :element-type '(unsigned-byte 8))))
+        (dotimes (index +termios-size+)
+          (setf (aref saved index) (ccl:%get-unsigned-byte pointer index)))
+        (setf *terminal-saved-termios* saved))
+      (setf (ccl:%get-unsigned-long pointer +termios-lflag-offset+)
+            (logandc2 (ccl:%get-unsigned-long pointer +termios-lflag-offset+)
+                      +termios-raw-lflag-mask+))
+      (setf (ccl:%get-unsigned-byte pointer +termios-vtime-offset+) 0)
+      (setf (ccl:%get-unsigned-byte pointer +termios-vmin-offset+) 1)
+      (terminal--set-termios pointer))))
 
 (defun terminal-restore ()
   "Restore the terminal state saved by TERMINAL-RAW."
-  (when *terminal-saved-state*
-    (terminal-run-stty (list *terminal-saved-state*))
-    (setf *terminal-saved-state* nil))
+  (when *terminal-saved-termios*
+    (ccl:%stack-block ((pointer +termios-size+))
+      (dotimes (index +termios-size+)
+        (setf (ccl:%get-unsigned-byte pointer index)
+              (aref *terminal-saved-termios* index)))
+      (terminal--set-termios pointer))
+    (setf *terminal-saved-termios* nil))
   (values))
 
 (defun terminal-size ()
   "Return the terminal dimensions as (values rows columns).
    Falls back to 24 by 80 when the size cannot be determined."
-  (let* ((size  (terminal-run-stty '("size")))
-         (space (and size (position #\space size))))
-    (if space
-        (values (or (parse-integer size :end space :junk-allowed t) 24)
-                (or (parse-integer size :start (1+ space) :junk-allowed t) 80))
+  (ccl:%stack-block ((pointer 8))
+    (if (zerop (external-call "ioctl" :int 0 :unsigned-long +winsize-ioctl+
+                              :address pointer :int))
+        (let ((rows    (ccl:%get-unsigned-word pointer 0))
+              (columns (ccl:%get-unsigned-word pointer 2)))
+          (values (if (plusp rows) rows 24)
+                  (if (plusp columns) columns 80)))
         (values 24 80))))
+
+
+;;; Foreground process groups
+
+(defun terminal-signals-setup ()
+  "Ignore the terminal stop signals so handing the terminal to child
+   process groups and taking it back never stops the shell."
+  (external-call "signal" :int +sigttou+ :address (ccl:%int-to-ptr 1) :address)
+  (external-call "signal" :int +sigttin+ :address (ccl:%int-to-ptr 1) :address)
+  (values))
+
+(defun terminal-own-process-group ()
+  "Return the shell's own process group id."
+  (external-call "getpgrp" :int))
+
+(defun terminal-foreground (process-group)
+  "Make PROCESS-GROUP the terminal's foreground process group."
+  (external-call "tcsetpgrp" :int 0 :int process-group :int)
+  (values))
+
+(defun process-group-continue (process-group)
+  "Send SIGCONT to PROCESS-GROUP, unsticking a child that touched the
+   terminal in the window before it became the foreground group."
+  (external-call "kill" :int (- process-group) :int +sigcont+ :int)
+  (values))
 
 
 ;;; ANSI sequences

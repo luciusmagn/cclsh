@@ -5,6 +5,7 @@
   (:import-from #:ccl
                 #:run-program
                 #:external-process-status
+                #:external-process-id
                 #:external-process-input-stream
                 #:external-process-output-stream
                 #:getenv
@@ -13,6 +14,7 @@
                 #:quit
                 #:process-run-function
                 #:make-external-format
+                #:external-call
                 #:*break-hook*)
   (:export #:main
            #:shell-toplevel

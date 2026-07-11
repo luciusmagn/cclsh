@@ -147,6 +147,23 @@
         (return (external-process-exit-status process))))
     (sleep 0.005)))
 
+(defun command--run-foreground (process)
+  "Wait for PROCESS as the terminal's foreground job and take the
+   terminal back afterwards. CCL gives every child its own process
+   group, so without this handoff a child touching the terminal would
+   stop with SIGTTIN or SIGTTOU."
+  (let ((interactive (terminal-tty-p))
+        (shell-group (terminal-own-process-group))
+        (child-group (external-process-id process)))
+    (unwind-protect
+        (progn
+          (when (and interactive child-group)
+            (terminal-foreground child-group)
+            (process-group-continue child-group))
+          (external-wait process))
+      (when interactive
+        (terminal-foreground shell-group)))))
+
 (defun command-execute-external (path arguments)
   "Run the program at PATH with ARGUMENTS sharing the terminal.
    Returns the exit status."
@@ -154,8 +171,8 @@
                               :input  t
                               :output t
                               :error  t
-                              :wait   t)))
-    (external-process-exit-status process)))
+                              :wait   nil)))
+    (command--run-foreground process)))
 
 (defun command-execute-builtin (command arguments)
   "Apply the builtin COMMAND to ARGUMENTS. Returns an exit status: the
