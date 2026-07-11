@@ -55,7 +55,7 @@
    arguments) triples and signals COMMAND-NOT-FOUND-ERROR early."
   (loop for (name . arguments) in stages
         collect (multiple-value-bind (kind target)
-                    (command-resolve name)
+                    (command-resolve-fresh name)
                   (when (eq kind ':unknown)
                     (error 'command-not-found-error :name name))
                   (list kind target arguments))))
@@ -157,7 +157,7 @@
   (let ((status 0))
     (loop for (name . arguments) in stages
           do (multiple-value-bind (kind target)
-                 (command-resolve name)
+                 (command-resolve-fresh name)
                (setf status
                      (ecase kind
                        (:builtin  (command-execute-builtin target arguments))

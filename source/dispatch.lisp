@@ -44,7 +44,7 @@
         (if (null words)
             *last-status*
             (multiple-value-bind (kind target)
-                (command-resolve (first words))
+                (command-resolve-fresh (first words))
               (ecase kind
                 (:builtin  (command-execute-builtin target (rest words)))
                 (:external (command-execute-external target (rest words)))
