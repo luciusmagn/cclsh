@@ -72,6 +72,10 @@
   "True when standard input is an interactive terminal."
   (= 1 (external-call "isatty" :int 0 :int)))
 
+(defun terminal-output-tty-p ()
+  "True when standard output is a terminal."
+  (= 1 (external-call "isatty" :int 1 :int)))
+
 (defun terminal--get-termios (pointer)
   "Fill POINTER with the terminal attributes. Returns true on success."
   (zerop (external-call "tcgetattr" :int 0 :address pointer :int)))
@@ -157,6 +161,31 @@
           +escape-character+ bold (ansi-color-code color) text
           +escape-character+))
 
+(defun ansi-reverse-video (text)
+  "Wrap TEXT in the reverse video SGR sequence."
+  (format nil "~c[7m~a~c[0m" +escape-character+ text +escape-character+))
+
+(defun terminal-fresh-line ()
+  "Ensure the next output starts at column 0 of a fresh line. On a
+   terminal this uses the fish trick: print a reverse video return
+   marker followed by a line of spaces and a carriage return. When the
+   previous output ended mid-line the spaces wrap, leaving the marker
+   visible; at column 0 the next write simply overwrites it. Off
+   terminals this falls back to FRESH-LINE."
+  (if (terminal-output-tty-p)
+      (multiple-value-bind (rows columns)
+          (terminal-size)
+        (declare (ignore rows))
+        (write-string (ansi-reverse-video "⏎"))
+        (dotimes (fill (max 0 (- columns 2)))
+          (declare (ignore fill))
+          (write-char #\space))
+        (write-char #\return)
+        (write-string (ansi-clear-line-right))
+        (force-output))
+      (fresh-line))
+  (values))
+
 (defun ansi-cursor-up (lines)
   "Return the sequence moving the cursor LINES up, or an empty string."
   (if (plusp lines)
@@ -170,6 +199,10 @@
 (defun ansi-clear-below ()
   "Return the sequence clearing from the cursor to the screen end."
   (format nil "~c[J" +escape-character+))
+
+(defun ansi-clear-line-right ()
+  "Return the sequence clearing from the cursor to the line end."
+  (format nil "~c[K" +escape-character+))
 
 (defun ansi-clear-screen ()
   "Return the sequence clearing the whole screen and homing the cursor."

@@ -30,6 +30,7 @@
               (setf *** **
                     **  *
                     *   (first values))
+              (terminal-fresh-line)
               (dolist (value values)
                 (format t "~s~%" value))))))
     (serious-condition (condition)
