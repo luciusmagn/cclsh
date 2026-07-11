@@ -140,6 +140,30 @@
                      (values ':external path)
                      (values ':unknown nil))))))))
 
+(defun word-evaluates-alone-p (word)
+  "True when WORD typed alone would evaluate as Lisp rather than fail
+   as an unknown command: it is a keyword or number literal, or names
+   a bound variable. Uses FIND-SYMBOL so probing never interns, and
+   its second value so the symbol NIL still counts as found."
+  (cond ((and (> (length word) 1)
+              (char= (char word 0) #\:))
+         t)
+        ((multiple-value-bind (symbol found)
+             (find-symbol (string-upcase word) *package*)
+           (and found (boundp symbol)))
+         t)
+        ((lisp-number-text-p word)
+         (multiple-value-bind (object position)
+             (ignore-errors
+               (let ((*read-eval* nil))
+                 (read-from-string word)))
+           (and position
+                (numberp object)
+                (= position (length word))
+                t)))
+        (t
+         nil)))
+
 (defun command-resolve-fresh (word)
   "Resolve WORD like COMMAND-RESOLVE, but retry a PATH miss with a
    fresh filesystem scan. Highlighting caches a miss for every prefix

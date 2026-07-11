@@ -22,16 +22,20 @@
   (let ((start (position-if-not #'whitespace-char-p line)))
     (and start (char= (char line start) #\() t)))
 
-(defun highlight-command-name (word)
+(defun highlight-command-name (word lone-p)
   "Return the color keyword for a command WORD by how it resolves:
-   builtins cyan, external programs green, unknown commands red."
+   builtins cyan, external programs green, unknown commands red. A
+   lone word that would evaluate as Lisp (a bound variable or number)
+   is magenta."
   (multiple-value-bind (kind target)
       (command-resolve (escape-remove (tilde-expand word)))
     (declare (ignore target))
     (ecase kind
       (:builtin  ':cyan)
       (:external ':green)
-      (:unknown  ':red))))
+      (:unknown  (if (and lone-p (word-evaluates-alone-p word))
+                     ':magenta
+                     ':red)))))
 
 (defun highlight--command (line tokens)
   "Render LINE with command mode colors."
@@ -45,7 +49,9 @@
       (dolist (token tokens)
         (let ((text (token-text line token)))
           (cond ((eq token head-token)
-                 (write-string (ansi-colorize text (highlight-command-name text))
+                 (write-string (ansi-colorize text
+                                              (highlight-command-name
+                                               text (null (rest groups))))
                                highlighted))
                 ((member (token-type token) '(:double-quote :single-quote))
                  (write-string (ansi-colorize text ':yellow) highlighted))

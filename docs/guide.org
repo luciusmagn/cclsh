@@ -37,7 +37,14 @@ When you press Enter, cclsh looks at the line:
    - a symbol in the current package whose value is a =command=
      instance runs as a builtin,
    - otherwise the word is looked up in =PATH=.
-3. Nothing found means a red =command not found= and status 127.
+3. When nothing matches and the line is a single word that names a
+   bound variable or keyword, or is a number literal, it evaluates
+   REPL style instead: after =(defvar *balls* 'hi)=, typing =*balls*=
+   prints =HI=. Real commands always win; the fallback only runs once
+   builtin and =PATH= resolution both miss, and it reads the raw word,
+   so glob characters in earmuffed names cannot mangle it. The
+   highlighter shows such words magenta.
+4. Otherwise a red =command not found= and status 127.
 
 Because only symbols bound to =command= instances count, ordinary Lisp
 bindings never shadow programs: typing =time= runs =/bin/time=, not the

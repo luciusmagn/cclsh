@@ -37,6 +37,18 @@
       (dispatch-report-error condition)
       1)))
 
+(defun dispatch--lone-value-status (line)
+  "REPL fallback once command resolution has failed: a lone word that
+   names a bound variable or keyword, or is a number literal,
+   evaluates and prints as Lisp. Works on the raw LINE so glob
+   characters in names like *earmuffed* variables cannot mangle it.
+   Returns the exit status, or NIL when the fallback does not apply."
+  (let ((trimmed (string-trim *whitespace-characters* line)))
+    (when (and (plusp (length trimmed))
+               (notany #'whitespace-char-p trimmed)
+               (word-evaluates-alone-p trimmed))
+      (dispatch-lisp trimmed))))
+
 (defun dispatch-command (line)
   "Execute LINE as a shell command line. Returns an exit status."
   (handler-case
@@ -48,8 +60,9 @@
               (ecase kind
                 (:builtin  (command-execute-builtin target (rest words)))
                 (:external (command-execute-external target (rest words)))
-                (:unknown  (error 'command-not-found-error
-                                  :name (first words)))))))
+                (:unknown  (or (dispatch--lone-value-status line)
+                               (error 'command-not-found-error
+                                      :name (first words))))))))
     (shell-error (condition)
       (dispatch-report-error condition)
       127)

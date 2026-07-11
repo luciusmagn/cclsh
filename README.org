@@ -36,6 +36,9 @@ This produces a standalone =cclsh= binary in the repository root via
 - Otherwise the first word resolves to a shell command: a symbol whose
   value is a =command= instance runs as a builtin, anything else is
   looked up in =PATH= and run as an external program.
+- A lone word that names a bound variable, a keyword or a number
+  evaluates REPL style when no command matches: =*last-status*= alone
+  just prints its value.
 - =~=, =$VAR=, =${VAR}= and =*=/=?= globs expand in bare words. Quoting
   with ="..."= (variables expand) and ='...'= (literal) is supported.
 - Unbalanced Lisp forms continue on the next line.
