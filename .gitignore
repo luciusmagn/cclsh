@@ -1,0 +1,6 @@
+/cclsh
+*.lx64fsl
+*.lx32fsl
+*.dx64fsl
+*.wx64fsl
+*~

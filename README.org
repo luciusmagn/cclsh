@@ -1,0 +1,77 @@
+#+TITLE: cclsh
+#+AUTHOR: Lukáš Hozda
+
+A system shell running inside Clozure CL. Every command line is either a
+Unix command or a Lisp form, evaluated in a live CCL image.
+
+* Requirements
+
+- Clozure CL (=ccl= in PATH)
+- starship (prompt rendering, with a plain fallback when missing)
+- stty (raw terminal switching, part of coreutils)
+
+The shell code itself has zero dependencies beyond CCL and ASDF. When
+=~/quicklisp/setup.lisp= exists at build time, Quicklisp is baked into
+the produced image so =(ql:quickload ...)= works out of the box.
+
+* Building
+
+#+begin_src sh
+scripts/build
+#+end_src
+
+This produces a standalone =cclsh= binary in the repository root via
+=ccl:save-application=. Alternatively, from a running CCL:
+
+#+begin_src lisp
+(asdf:load-system "cclsh")
+(cclsh:main)
+#+end_src
+
+* Behavior
+
+- A line starting with =(= is evaluated as Lisp in the =cclsh-user=
+  package, values are printed like a REPL.
+- Otherwise the first word resolves to a shell command: a symbol whose
+  value is a =command= instance runs as a builtin, anything else is
+  looked up in =PATH= and run as an external program.
+- =~=, =$VAR=, =${VAR}= and =*=/=?= globs expand in bare words. Quoting
+  with ="..."= (variables expand) and ='...'= (literal) is supported.
+- Unbalanced Lisp forms continue on the next line.
+- =~/.config/cclsh/startup.lisp= is loaded on startup, history persists
+  in =~/.config/cclsh/history= (=XDG_CONFIG_HOME= is respected).
+
+* Lisp helpers
+
+#+begin_src lisp
+;; Pipelines, sequencing, and conditional chains
+(pipe (ls "-la") (grep "lisp"))   ; ls -la | grep lisp
+(seq (make "clean") (make))       ; make clean ; make
+(all (make) (make "install"))     ; make && make install
+(any (probe) (fallback))          ; probe || fallback
+
+;; Run a program directly, returns the exit status
+(run "git" "status")
+
+;; Define your own commands (usable from the command line and Lisp)
+(defcommand gs ()
+  "Short git status."
+  (run "git" "status" "--short"))
+#+end_src
+
+=*last-status*= holds the exit status of the last command.
+
+* Line editor
+
+Arrow keys navigate history and the cursor. Supported keys: C-a/C-e
+(home/end), C-k/C-u (kill to end/whole line), C-w (kill word), C-l
+(clear screen), C-d (EOF on an empty line), C-c (abort line). Input is
+highlighted with the standard 16 terminal colors: known commands green,
+builtins cyan, unknown commands red, strings yellow, comments and parens
+dim, keywords magenta, numbers cyan.
+
+* Not yet
+
+Job control (bg/fg/C-z), tab completion, redirection syntax in command
+mode, and a right-side prompt. Multi-line history entries are recalled
+with newlines folded to spaces.
