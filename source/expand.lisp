@@ -171,11 +171,21 @@
     (let ((files          nil)
           (subdirectories nil))
       (dolist (entry entries)
-        (if (pathname-directory-form-p entry)
-            (let ((name (first (last (pathname-directory entry)))))
-              (when (stringp name)
-                (push name subdirectories)))
-            (push (file-namestring entry) files)))
+        ;; Native namestrings avoid CCL's backslash quoting of wild
+        ;; characters, so a file literally named st*ar.txt lists as
+        ;; itself rather than as st\*ar.txt.
+        (let* ((native  (ignore-errors
+                          (ccl:native-translated-namestring entry)))
+               (trimmed (and native (string-right-trim "/" native)))
+               (name    (and trimmed
+                             (subseq trimmed
+                                     (1+ (or (position #\/ trimmed
+                                                       :from-end t)
+                                             -1))))))
+          (when (and name (plusp (length name)))
+            (if (pathname-directory-form-p entry)
+                (push name subdirectories)
+                (push name files)))))
       (values files subdirectories))))
 
 (defun glob--split-segments (pattern)
