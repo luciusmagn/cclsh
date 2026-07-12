@@ -9,7 +9,10 @@
 ;;;
 ;;; Redirection is spelled as stages recognized by name inside PIPE and
 ;;; CAPTURE: (from "file") as the first stage feeds standard input,
-;;; (to "file") or (append-to "file") as the last stage writes it.
+;;; (to "file") or (append-to "file") as the last stage writes it, and
+;;; anywhere in the pipeline (error-to "file"), (error-append-to
+;;; "file") or (merge-error) direct the standard error of every stage
+;;; to a file or into the ordinary output.
 ;;;
 ;;; Intermediate pipe streams use ISO-8859-1 so every byte round-trips
 ;;; unchanged through the Lisp-side copier threads; CAPTURE re-decodes
@@ -39,8 +42,9 @@
 (defmacro pipe (&rest stages)
   "Run STAGES as a pipeline: (pipe (ls \"-la\") (grep \"lisp\")).
    (from \"file\") first feeds standard input, (to \"file\") or
-   (append-to \"file\") last redirects the output. Returns the exit
-   status of the last command stage."
+   (append-to \"file\") last redirects the output, and (error-to
+   \"file\"), (error-append-to \"file\") or (merge-error) direct
+   standard error. Returns the exit status of the last command stage."
   `(pipeline-run (list ,@(mapcar #'pipeline--stage-form stages))))
 
 (defmacro capture (&rest stages)
@@ -99,6 +103,15 @@
                  (list ':redirect-out (redirect-path) nil))
                 ((string= name "append-to")
                  (list ':redirect-out (redirect-path) t))
+                ((string= name "error-to")
+                 (list ':redirect-error (redirect-path) nil))
+                ((string= name "error-append-to")
+                 (list ':redirect-error (redirect-path) t))
+                ((string= name "merge-error")
+                 (when arguments
+                   (error 'pipeline-syntax-error
+                          :message "merge-error takes no arguments"))
+                 (list ':merge-error nil nil))
                 (t
                  (multiple-value-bind (kind target)
                      (command-resolve-fresh name)
@@ -108,25 +121,45 @@
 
 (defun pipeline--split-redirects (resolved)
   "Strip and validate redirect stages. Returns (values commands
-   input-path output-path append)."
-  (let ((input-path  nil)
-        (output-path nil)
-        (append      nil)
-        (commands    resolved))
-    (when (and commands (eq (first (first commands)) ':redirect-in))
-      (setf input-path (second (first commands)))
-      (setf commands (rest commands)))
-    (let ((final (first (last commands))))
-      (when (and final (eq (first final) ':redirect-out))
-        (setf output-path (second final))
-        (setf append (third final))
-        (setf commands (butlast commands))))
-    (when (find-if (lambda (entry)
-                     (member (first entry) '(:redirect-in :redirect-out)))
-                   commands)
-      (error 'pipeline-syntax-error
-             :message "from must be the first stage, to and append-to the last"))
-    (values commands input-path output-path append)))
+   input-path output-path append error-path error-append merge-error)."
+  (let ((error-path   nil)
+        (error-append nil)
+        (merge-error  nil)
+        (remaining    nil))
+    (dolist (entry resolved)
+      (case (first entry)
+        (:redirect-error
+         (when (or error-path merge-error)
+           (error 'pipeline-syntax-error
+                  :message "error-to, error-append-to and merge-error are mutually exclusive"))
+         (setf error-path (second entry))
+         (setf error-append (third entry)))
+        (:merge-error
+         (when (or error-path merge-error)
+           (error 'pipeline-syntax-error
+                  :message "error-to, error-append-to and merge-error are mutually exclusive"))
+         (setf merge-error t))
+        (t
+         (push entry remaining))))
+    (let ((input-path  nil)
+          (output-path nil)
+          (append      nil)
+          (commands    (nreverse remaining)))
+      (when (and commands (eq (first (first commands)) ':redirect-in))
+        (setf input-path (second (first commands)))
+        (setf commands (rest commands)))
+      (let ((final (first (last commands))))
+        (when (and final (eq (first final) ':redirect-out))
+          (setf output-path (second final))
+          (setf append (third final))
+          (setf commands (butlast commands))))
+      (when (find-if (lambda (entry)
+                       (member (first entry) '(:redirect-in :redirect-out)))
+                     commands)
+        (error 'pipeline-syntax-error
+               :message "from must be the first stage, to and append-to the last"))
+      (values commands input-path output-path append
+              error-path error-append merge-error))))
 
 (defun pipeline--copy-stream (input output)
   "Copy characters from INPUT to OUTPUT in a background thread, closing
@@ -151,22 +184,46 @@
   (force-output output)
   (values))
 
-(defun pipeline--argument-encode (argument)
-  "Re-encode ARGUMENT so the byte-transparent latin-1 argv encoding of
-   a pipe spawn emits its UTF-8 bytes; run-program's :external-format
-   also encodes the argument vector, not only the streams."
-  (map 'string #'code-char
-       (ccl:encode-string-to-octets argument :external-format ':utf-8)))
+(defun pipeline--copy-signaled (input output semaphore)
+  "Copy INPUT into the shared OUTPUT sink in a background thread,
+   closing only INPUT and signaling SEMAPHORE when drained, so the
+   caller can join every error copier before closing the sink."
+  (process-run-function "cclsh stderr copier"
+                        (lambda ()
+                          (ignore-errors
+                            (loop for char = (read-char input nil nil)
+                                  while char
+                                  do (write-char char output)
+                                  unless (listen input)
+                                    do (force-output output)))
+                          (ignore-errors (force-output output))
+                          (ignore-errors (close input))
+                          (ccl:signal-semaphore semaphore))))
 
-(defun pipeline--spawn-external (target arguments input last-stage-p)
+(defun pipeline--string-encode (text)
+  "Re-encode TEXT so writing it through a byte-transparent latin-1
+   channel emits its UTF-8 bytes. Used for spawn argument vectors
+   (run-program's :external-format also encodes those) and for builtin
+   error output going into a shared error sink."
+  (map 'string #'code-char
+       (ccl:encode-string-to-octets text :external-format ':utf-8)))
+
+(defun pipeline--spawn-external (target arguments input last-stage-p
+                                 error-mode)
   "Spawn one external stage. INPUT is NIL for the first stage (inherit
-   the terminal) or a Lisp stream carrying the previous stage's output.
-   Returns (values process output-stream)."
+   the terminal) or a Lisp stream carrying the previous stage's
+   output. ERROR-MODE is NIL for the terminal, :OUTPUT to merge
+   standard error into the ordinary output, or :STREAM to expose the
+   process error stream for the caller's collector. Returns (values
+   process output-stream)."
   (let ((process (run-program target
-                              (mapcar #'pipeline--argument-encode arguments)
+                              (mapcar #'pipeline--string-encode arguments)
                               :input           (if input ':stream t)
                               :output          (if last-stage-p t ':stream)
-                              :error           t
+                              :error           (case error-mode
+                                                 ((nil)    t)
+                                                 (:output  ':output)
+                                                 (:stream  ':stream))
                               :wait            nil
                               :external-format *pipe-external-format*)))
     (when input
@@ -175,17 +232,35 @@
             (unless last-stage-p
               (external-process-output-stream process)))))
 
-(defun pipeline--run-builtin (target arguments input last-stage-p)
+(defun pipeline--run-builtin (target arguments input last-stage-p
+                              error-sink merge-error)
   "Run one builtin stage inline. Output is buffered when the stage is
-   not last so the next stage can stream it. Returns (values status
-   output-stream)."
-  (if last-stage-p
-      (let ((*standard-input* (or input *standard-input*)))
-        (values (command-execute-builtin target arguments) nil))
-      (let ((buffer (make-string-output-stream)))
-        (let ((*standard-input*  (or input *standard-input*))
-              (*standard-output* buffer))
-          (let ((status (command-execute-builtin target arguments)))
+   not last so the next stage can stream it; *ERROR-OUTPUT* follows
+   the pipeline's error redirection like the external stages' standard
+   error, with builtin error text UTF-8 encoded into the
+   byte-transparent ERROR-SINK. Returns (values status output-stream)."
+  (labels ((invoke (output error)
+             (let ((*standard-input*  (or input *standard-input*))
+                   (*standard-output* output)
+                   (*error-output*    (or error *error-output*)))
+               (command-execute-builtin target arguments)))
+
+           (invoke-with-error (output)
+             (cond (merge-error
+                    (invoke output output))
+                   (error-sink
+                    (let ((collected (make-string-output-stream)))
+                      (prog1 (invoke output collected)
+                        (write-string (pipeline--string-encode
+                                       (get-output-stream-string collected))
+                                      error-sink)
+                        (force-output error-sink))))
+                   (t
+                    (invoke output nil)))))
+    (if last-stage-p
+        (values (invoke-with-error *standard-output*) nil)
+        (let ((buffer (make-string-output-stream)))
+          (let ((status (invoke-with-error buffer)))
             (values status
                     (make-string-input-stream
                      (get-output-stream-string buffer))))))))
@@ -200,33 +275,49 @@
       string))
 
 (defun pipeline--execute (resolved capture)
-  "Run RESOLVED stages: redirect stages feed or receive files, and
-   with CAPTURE the final output is collected instead of written to
-   the terminal. Returns (values status captured-string)."
-  (multiple-value-bind (commands input-path output-path append)
+  "Run RESOLVED stages: redirect stages feed or receive files, error
+   redirects apply to every stage, and with CAPTURE the final output
+   is collected instead of written to the terminal. Returns (values
+   status captured-string)."
+  (multiple-value-bind (commands input-path output-path append
+                        error-path error-append merge-error)
       (pipeline--split-redirects resolved)
     (when (and capture output-path)
       (error 'pipeline-syntax-error
              :message "capture cannot combine with to or append-to"))
-    (let ((interactive  (terminal-tty-p))
-          (shell-group  (terminal-own-process-group))
-          (redirected   (or output-path capture))
-          (opened-input nil)
-          (sink         nil)
-          (captured     nil)
-          (processes    nil)
-          (status       0)
-          (carried      nil)
-          (stage-index  0)
-          (foreground-p nil))
+    (let ((interactive     (terminal-tty-p))
+          (shell-group     (terminal-own-process-group))
+          (redirected      (or output-path capture))
+          (opened-input    nil)
+          (sink            nil)
+          (error-sink      nil)
+          (error-semaphore (ccl:make-semaphore))
+          (error-copiers   0)
+          (captured        nil)
+          (processes       nil)
+          (status          0)
+          (carried         nil)
+          (stage-index     0)
+          (foreground-p    nil))
       (unwind-protect
           (progn
             (when input-path
               (setf opened-input
                     (open input-path
                           :direction       :input
+                          :sharing         ':lock
                           :external-format *pipe-external-format*))
               (setf carried opened-input))
+            (when error-path
+              (setf error-sink
+                    (open error-path
+                          :direction         :output
+                          :if-exists         (if error-append
+                                                 ':append
+                                                 ':supersede)
+                          :if-does-not-exist :create
+                          :sharing           ':lock
+                          :external-format   *pipe-external-format*)))
             (loop for (kind target arguments) in commands
                   for remaining on commands
                   for last-stage-p = (and (null (rest remaining))
@@ -234,19 +325,28 @@
                   do (ecase kind
                        (:external
                         (multiple-value-bind (process output)
-                            (pipeline--spawn-external target arguments carried
-                                                      last-stage-p)
+                            (pipeline--spawn-external
+                             target arguments carried last-stage-p
+                             (cond (merge-error ':output)
+                                   (error-sink  ':stream)
+                                   (t           nil)))
                           (when (and interactive (zerop stage-index))
                             (terminal-foreground (external-process-id process))
                             (process-group-continue
                              (external-process-id process))
                             (setf foreground-p t))
+                          (when error-sink
+                            (pipeline--copy-signaled
+                             (ccl:external-process-error-stream process)
+                             error-sink error-semaphore)
+                            (incf error-copiers))
                           (push process processes)
                           (setf carried output)))
                        (:builtin
                         (multiple-value-bind (builtin-status output)
                             (pipeline--run-builtin target arguments carried
-                                                   last-stage-p)
+                                                   last-stage-p
+                                                   error-sink merge-error)
                           (setf status builtin-status)
                           (setf carried output))))
                      (incf stage-index))
@@ -271,11 +371,16 @@
                                          (nreverse processes))))
               (when (and exit-statuses
                          (eq (first (first (last commands))) ':external))
-                (setf status (first (last exit-statuses))))))
+                (setf status (first (last exit-statuses)))))
+            (dotimes (copier error-copiers)
+              (declare (ignorable copier))
+              (ccl:wait-on-semaphore error-semaphore)))
         (when foreground-p
           (terminal-foreground shell-group))
         (when sink
           (ignore-errors (close sink)))
+        (when error-sink
+          (ignore-errors (close error-sink)))
         (when opened-input
           (ignore-errors (close opened-input))))
       (setf *last-status* status)
