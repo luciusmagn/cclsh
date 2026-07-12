@@ -28,6 +28,7 @@
            #:run
            #:cmd
            #:pipe
+           #:capture
            #:seq
            #:all
            #:any
@@ -55,6 +56,7 @@
                           #:run
                           #:cmd
                           #:pipe
+                          #:capture
                           #:seq
                           #:all
                           #:any

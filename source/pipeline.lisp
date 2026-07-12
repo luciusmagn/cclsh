@@ -2,12 +2,18 @@
 ;;;
 ;;; Lisp helpers over shell commands: PIPE connects stages with Unix
 ;;; style pipes, SEQ runs stages one after another, ALL and ANY are the
-;;; && and || equivalents. A stage is written (name argument...) where
-;;; NAME resolves exactly like the first word of a command line and the
-;;; arguments are evaluated Lisp expressions.
+;;; && and || equivalents, and CAPTURE returns a pipeline's output as a
+;;; string. A stage is written (name argument...) where NAME resolves
+;;; exactly like the first word of a command line and the arguments are
+;;; evaluated Lisp expressions.
+;;;
+;;; Redirection is spelled as stages recognized by name inside PIPE and
+;;; CAPTURE: (from "file") as the first stage feeds standard input,
+;;; (to "file") or (append-to "file") as the last stage writes it.
 ;;;
 ;;; Intermediate pipe streams use ISO-8859-1 so every byte round-trips
-;;; unchanged through the Lisp-side copier threads.
+;;; unchanged through the Lisp-side copier threads; CAPTURE re-decodes
+;;; the collected bytes as UTF-8.
 
 (in-package #:cclsh)
 
@@ -15,6 +21,12 @@
   (make-external-format :character-encoding ':iso-8859-1
                         :line-termination   ':unix)
   "Byte-transparent external format for intermediate pipe streams.")
+
+(define-condition pipeline-syntax-error (shell-error)
+  ((message :initarg :message :reader pipeline-syntax-error-message))
+  (:documentation "Signaled for malformed pipeline redirections.")
+  (:report (lambda (condition stream)
+             (format stream "~a" (pipeline-syntax-error-message condition)))))
 
 (defun pipeline--stage-form (stage)
   "Translate one (name argument...) STAGE into a runtime stage form."
@@ -26,8 +38,17 @@
 
 (defmacro pipe (&rest stages)
   "Run STAGES as a pipeline: (pipe (ls \"-la\") (grep \"lisp\")).
-   Returns the exit status of the last stage."
+   (from \"file\") first feeds standard input, (to \"file\") or
+   (append-to \"file\") last redirects the output. Returns the exit
+   status of the last command stage."
   `(pipeline-run (list ,@(mapcar #'pipeline--stage-form stages))))
+
+(defmacro capture (&rest stages)
+  "Run STAGES as a pipeline and return its standard output as a string
+   with trailing newlines removed, so (capture (git \"rev-parse\"
+   \"HEAD\")) is sh's $(git rev-parse HEAD). Returns (values string
+   status) and records *LAST-STATUS*."
+  `(pipeline-capture (list ,@(mapcar #'pipeline--stage-form stages))))
 
 (defmacro cmd (name &rest arguments)
   "Run one command from the middle of Lisp code: (cmd git \"status\").
@@ -59,14 +80,53 @@
 ;;; Runtime
 
 (defun pipeline--resolve-stages (stages)
-  "Resolve every stage head up front. Returns a list of (kind target
-   arguments) triples and signals COMMAND-NOT-FOUND-ERROR early."
+  "Resolve every stage up front: command stages to (kind target
+   arguments), redirect stages to (:redirect-in path) and
+   (:redirect-out path append). Signals COMMAND-NOT-FOUND-ERROR and
+   PIPELINE-SYNTAX-ERROR early."
   (loop for (name . arguments) in stages
-        collect (multiple-value-bind (kind target)
-                    (command-resolve-fresh name)
-                  (when (eq kind ':unknown)
-                    (error 'command-not-found-error :name name))
-                  (list kind target arguments))))
+        collect
+        (flet ((redirect-path ()
+                 (let ((path (first arguments)))
+                   (when (or (null path) (zerop (length path)))
+                     (error 'pipeline-syntax-error
+                            :message (format nil "~a needs a file path"
+                                             name)))
+                   path)))
+          (cond ((string= name "from")
+                 (list ':redirect-in (redirect-path) nil))
+                ((string= name "to")
+                 (list ':redirect-out (redirect-path) nil))
+                ((string= name "append-to")
+                 (list ':redirect-out (redirect-path) t))
+                (t
+                 (multiple-value-bind (kind target)
+                     (command-resolve-fresh name)
+                   (when (eq kind ':unknown)
+                     (error 'command-not-found-error :name name))
+                   (list kind target arguments)))))))
+
+(defun pipeline--split-redirects (resolved)
+  "Strip and validate redirect stages. Returns (values commands
+   input-path output-path append)."
+  (let ((input-path  nil)
+        (output-path nil)
+        (append      nil)
+        (commands    resolved))
+    (when (and commands (eq (first (first commands)) ':redirect-in))
+      (setf input-path (second (first commands)))
+      (setf commands (rest commands)))
+    (let ((final (first (last commands))))
+      (when (and final (eq (first final) ':redirect-out))
+        (setf output-path (second final))
+        (setf append (third final))
+        (setf commands (butlast commands))))
+    (when (find-if (lambda (entry)
+                     (member (first entry) '(:redirect-in :redirect-out)))
+                   commands)
+      (error 'pipeline-syntax-error
+             :message "from must be the first stage, to and append-to the last"))
+    (values commands input-path output-path append)))
 
 (defun pipeline--copy-stream (input output)
   "Copy characters from INPUT to OUTPUT in a background thread, closing
@@ -83,11 +143,27 @@
                           (ignore-errors (close output))
                           (ignore-errors (close input)))))
 
+(defun pipeline--copy-inline (input output)
+  "Copy INPUT to OUTPUT in this thread until end of input."
+  (loop for char = (read-char input nil nil)
+        while char
+        do (write-char char output))
+  (force-output output)
+  (values))
+
+(defun pipeline--argument-encode (argument)
+  "Re-encode ARGUMENT so the byte-transparent latin-1 argv encoding of
+   a pipe spawn emits its UTF-8 bytes; run-program's :external-format
+   also encodes the argument vector, not only the streams."
+  (map 'string #'code-char
+       (ccl:encode-string-to-octets argument :external-format ':utf-8)))
+
 (defun pipeline--spawn-external (target arguments input last-stage-p)
   "Spawn one external stage. INPUT is NIL for the first stage (inherit
    the terminal) or a Lisp stream carrying the previous stage's output.
    Returns (values process output-stream)."
-  (let ((process (run-program target arguments
+  (let ((process (run-program target
+                              (mapcar #'pipeline--argument-encode arguments)
                               :input           (if input ':stream t)
                               :output          (if last-stage-p t ':stream)
                               :error           t
@@ -114,49 +190,112 @@
                     (make-string-input-stream
                      (get-output-stream-string buffer))))))))
 
+(defun pipeline--string-decode (string)
+  "Reinterpret a byte-transparent latin-1 STRING as UTF-8, falling
+   back to the raw string when it does not decode."
+  (or (ignore-errors
+        (ccl:decode-string-from-octets
+         (map '(vector (unsigned-byte 8)) #'char-code string)
+         :external-format ':utf-8))
+      string))
+
+(defun pipeline--execute (resolved capture)
+  "Run RESOLVED stages: redirect stages feed or receive files, and
+   with CAPTURE the final output is collected instead of written to
+   the terminal. Returns (values status captured-string)."
+  (multiple-value-bind (commands input-path output-path append)
+      (pipeline--split-redirects resolved)
+    (when (and capture output-path)
+      (error 'pipeline-syntax-error
+             :message "capture cannot combine with to or append-to"))
+    (let ((interactive  (terminal-tty-p))
+          (shell-group  (terminal-own-process-group))
+          (redirected   (or output-path capture))
+          (opened-input nil)
+          (sink         nil)
+          (captured     nil)
+          (processes    nil)
+          (status       0)
+          (carried      nil)
+          (stage-index  0)
+          (foreground-p nil))
+      (unwind-protect
+          (progn
+            (when input-path
+              (setf opened-input
+                    (open input-path
+                          :direction       :input
+                          :external-format *pipe-external-format*))
+              (setf carried opened-input))
+            (loop for (kind target arguments) in commands
+                  for remaining on commands
+                  for last-stage-p = (and (null (rest remaining))
+                                          (not redirected))
+                  do (ecase kind
+                       (:external
+                        (multiple-value-bind (process output)
+                            (pipeline--spawn-external target arguments carried
+                                                      last-stage-p)
+                          (when (and interactive (zerop stage-index))
+                            (terminal-foreground (external-process-id process))
+                            (process-group-continue
+                             (external-process-id process))
+                            (setf foreground-p t))
+                          (push process processes)
+                          (setf carried output)))
+                       (:builtin
+                        (multiple-value-bind (builtin-status output)
+                            (pipeline--run-builtin target arguments carried
+                                                   last-stage-p)
+                          (setf status builtin-status)
+                          (setf carried output))))
+                     (incf stage-index))
+            (when redirected
+              (cond (capture
+                     (setf captured
+                           (with-output-to-string (collected)
+                             (when carried
+                               (pipeline--copy-inline carried collected)))))
+                    (t
+                     (setf sink
+                           (open output-path
+                                 :direction         :output
+                                 :if-exists         (if append
+                                                        ':append
+                                                        ':supersede)
+                                 :if-does-not-exist :create
+                                 :external-format   *pipe-external-format*))
+                     (when carried
+                       (pipeline--copy-inline carried sink)))))
+            (let ((exit-statuses (mapcar #'external-wait
+                                         (nreverse processes))))
+              (when (and exit-statuses
+                         (eq (first (first (last commands))) ':external))
+                (setf status (first (last exit-statuses))))))
+        (when foreground-p
+          (terminal-foreground shell-group))
+        (when sink
+          (ignore-errors (close sink)))
+        (when opened-input
+          (ignore-errors (close opened-input))))
+      (setf *last-status* status)
+      (values status
+              (and captured
+                   (string-right-trim '(#\newline)
+                                      (pipeline--string-decode captured)))))))
+
 (defun pipeline-run (stages)
-  "Run resolved STAGES as a pipeline and return the last exit status.
-   When the first stage is external it reads the terminal, so it gets
-   the terminal's foreground process group for the pipeline's duration;
-   later stages only touch pipes."
-  (let ((resolved     (pipeline--resolve-stages stages))
-        (interactive  (terminal-tty-p))
-        (shell-group  (terminal-own-process-group))
-        (processes    nil)
-        (status       0)
-        (carried      nil)
-        (stage-index  0)
-        (foreground-p nil))
-    (unwind-protect
-        (progn
-          (loop for (kind target arguments) in resolved
-                for remaining on resolved
-                for last-stage-p = (null (rest remaining))
-                do (ecase kind
-                     (:external
-                      (multiple-value-bind (process output)
-                          (pipeline--spawn-external target arguments carried
-                                                    last-stage-p)
-                        (when (and interactive (zerop stage-index))
-                          (terminal-foreground (external-process-id process))
-                          (process-group-continue (external-process-id process))
-                          (setf foreground-p t))
-                        (push process processes)
-                        (setf carried output)))
-                     (:builtin
-                      (multiple-value-bind (builtin-status output)
-                          (pipeline--run-builtin target arguments carried
-                                                 last-stage-p)
-                        (setf status builtin-status)
-                        (setf carried output))))
-                   (incf stage-index))
-          (let ((exit-statuses (mapcar #'external-wait (nreverse processes))))
-            (when (and exit-statuses
-                       (eq (first (first (last resolved))) ':external))
-              (setf status (first (last exit-statuses))))))
-      (when foreground-p
-        (terminal-foreground shell-group)))
-    (setf *last-status* status)))
+  "Run STAGES as a pipeline and return the last command's exit status.
+   The first command stage owns the terminal, so Ctrl-C interrupts the
+   pipeline from its head; later stages only touch pipes."
+  (values (pipeline--execute (pipeline--resolve-stages stages) nil)))
+
+(defun pipeline-capture (stages)
+  "Run STAGES as a pipeline capturing standard output. Returns
+   (values string status)."
+  (multiple-value-bind (status captured)
+      (pipeline--execute (pipeline--resolve-stages stages) t)
+    (values (or captured "") status)))
 
 (defun stage-sequence-run (stages mode)
   "Run STAGES one after another in the foreground. MODE is :ALWAYS,
