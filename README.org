@@ -41,6 +41,8 @@ This produces a standalone =cclsh= binary in the repository root via
   just prints its value.
 - =~=, =$VAR=, =${VAR}= and =*=/=?= globs expand in bare words. Quoting
   with ="..."= (variables expand) and ='...'= (literal) is supported.
+- Parens substitute Lisp values into commands: =echo (*balls*)= prints
+  the variable, =echo (+ 1 2)= prints 3, lists splice, NIL vanishes.
 - Unfinished input continues on the next line: unbalanced Lisp forms,
   open strings, and trailing backslashes.
 - Undefined functions are reported with suggestions before argument

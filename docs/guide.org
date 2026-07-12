@@ -67,6 +67,7 @@ Words are split on whitespace with shell-like quoting and expansion:
 | =*=, =?=      | glob against the filesystem, per path segment           |
 | ="..."=       | one word, =$VAR= still expands inside                   |
 | ='...'=       | one word, everything literal                            |
+| =(form)=      | Lisp substitution, =$(form)= works too                  |
 | =\x=          | escape: =\ = joins words, =\*= is a literal star        |
 
 Details worth knowing:
@@ -81,6 +82,33 @@ Details worth knowing:
 - There is no =|=, =>= or =<= syntax. A =|= in command mode is passed
   to the program as a literal argument. Pipelines are Lisp forms, see
   below.
+
+** Lisp substitution
+
+Parens inside a command line evaluate as Lisp and substitute their
+value. The outer parens are shell delimiters: a single form inside is
+an expression, several forms become one function call.
+
+#+begin_src sh
+echo (*balls*)                     # the value of *balls*
+echo (+ 1 2)                       # 3
+echo (string-downcase *balls*)     # a call
+mv draft.txt (format nil "post-~a.txt" (get-universal-time))
+#+end_src
+
+Rules:
+
+- =$(form)= is an alternative spelling of the same thing.
+- A standalone substitution returning a proper list splices into
+  several arguments, and NIL vanishes entirely, like an unset =$VAR=.
+- Inside a larger word the value concatenates: =x(+ 1 2)y= is =x3y=,
+  and NIL contributes an empty string.
+- Substitution results are used verbatim: no globbing or further
+  expansion applies to them.
+- Quote parens to keep them literal: ='(1 2 3)'= stays text. Unquoted
+  parens in filenames now need quoting or escaping.
+- An unterminated substitution continues on the next line, and Tab
+  completes Lisp symbols inside the parens.
 
 * Lisp mode
 
