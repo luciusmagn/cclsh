@@ -89,8 +89,9 @@ names, file paths and Lisp symbols. Supported keys: C-a/C-e
 highlighted with the standard 16 terminal colors: known commands green,
 builtins cyan, unknown commands red, strings yellow, comments and parens
 dim, keywords magenta, numbers cyan. Output that ends without a newline
-gets a reverse video ⏎ marker, fish style. See =docs/guide.org= for the
-full guide, including login shell setup.
+gets a reverse video ⏎ marker, fish style. The =help= builtin prints
+the built-in manual (=help substitution= etc.); =docs/guide.org= is the
+long form, including login shell setup.
 
 * Not yet
 

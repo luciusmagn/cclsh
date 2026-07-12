@@ -192,7 +192,8 @@ fine.
 
 Builtins that ship with the shell: =cd= (supports =-=, updates =PWD=
 and =OLDPWD=), =exit=, =export=, =unset=, =rehash= (drop cached =PATH=
-lookups and completions) and =commands= (list all defined commands).
+lookups and completions), =commands= (list all defined commands) and
+=help= (the built-in manual; =help SECTION= elaborates).
 
 * Pipelines and sequencing
 
