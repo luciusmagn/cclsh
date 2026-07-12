@@ -144,12 +144,17 @@ string (sh's $(cmd)), trailing newlines trimmed:
   (pipe (make) (append-to \"build.log\"))  make >> build.log
   (pipe (from \"in.txt\") (wc \"-l\"))     wc -l < in.txt
   (pipe (from \"a.bin\") (to \"b.bin\"))   byte-exact file copy
+  (pipe (make) (error-to \"err.log\"))   make 2> err.log
+  (pipe (make) (error-append-to \"err.log\"))  make 2>> err.log
+  (capture (make) (merge-error))       both streams, sh's 2>&1
   (capture (git \"rev-parse\" \"HEAD\"))   \"3e45271...\"
   echo (capture (hostname))            capture inside substitution
 
-Each returns the deciding exit status and records *last-status*. The
-first stage owns the terminal, so Ctrl-C interrupts the pipeline from
-its head. Standard error always goes to the terminal for now.")
+Error redirection applies to every stage, builtins included, and
+merge-error sends standard error wherever the ordinary output goes.
+Each pipeline returns the deciding exit status and records
+*last-status*. The first stage owns the terminal, so Ctrl-C interrupts
+the pipeline from its head.")
 
     ("editing" "keys, completion and colors"
      "Tab completes command names in command position, file paths

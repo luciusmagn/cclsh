@@ -220,15 +220,22 @@ name itself is computed.
 
 Redirection is spelled as stages, recognized by name inside =pipe= and
 =capture=: =(from "file")= first feeds standard input, =(to "file")=
-or =(append-to "file")= last writes the output. =capture= returns the
-output as a string with trailing newlines trimmed, which is sh's
-=$(cmd)=, and composes with Lisp substitution:
+or =(append-to "file")= last writes the output, and anywhere in the
+pipeline =(error-to "file")=, =(error-append-to "file")= or
+=(merge-error)= direct the standard error of every stage to a file or
+into the ordinary output (sh's =2>=, =2>>= and =2>&1=). =capture=
+returns the output as a string with trailing newlines trimmed, which
+is sh's =$(cmd)=, and composes with Lisp substitution:
 
 #+begin_src lisp
 (pipe (make) (to "build.log"))            ; make > build.log
 (pipe (make "install") (append-to "build.log"))
 (pipe (from "access.log") (grep "500") (wc "-l"))
 (pipe (from "a.bin") (to "b.bin"))        ; byte-exact file copy
+
+(pipe (make) (error-to "errors.log"))     ; make 2> errors.log
+(pipe (make) (to "all.log") (merge-error)) ; make > all.log 2>&1
+(capture (make) (merge-error))            ; both streams as a string
 
 (capture (git "rev-parse" "HEAD"))        ; "3e45271..." as a string
 (defvar *head* (capture (git "rev-parse" "--short" "HEAD")))
@@ -242,8 +249,9 @@ echo deployed (capture (git rev-parse "--short" HEAD))
 
 (note =rev-parse= and =HEAD= are evaluated stage arguments, so bare
 symbols only work when bound; strings are the safe spelling). File
-redirection is byte-transparent; =capture= decodes UTF-8. Standard
-error always goes to the terminal for now.
+redirection is byte-transparent, =capture= decodes UTF-8, and error
+redirection covers builtin stages' =*error-output*= too. =error-to=
+and =merge-error= are mutually exclusive.
 
 Each returns the deciding exit status and records it in
 =*last-status*=. Builtin commands can appear inside =pipe= as well;
@@ -407,8 +415,8 @@ config change) restores fish, and a root TTY login works regardless.
   foreground child with no way to resume it from the shell (use
   =kill -CONT= from elsewhere).
 - No => < >>= characters in command mode; redirection is Lisp:
-  =(to ...)=, =(append-to ...)=, =(from ...)= and =(capture ...)=.
-  Standard error cannot be redirected yet.
+  =(to ...)=, =(append-to ...)=, =(from ...)=, =(error-to ...)=,
+  =(merge-error)= and =(capture ...)=.
 - =-c= strings and scripts use cclsh syntax, not sh; complex remote
   commands may need =sh -c= spelled explicitly.
 - Script arguments (argv for scripts) are not passed yet.

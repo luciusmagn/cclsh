@@ -70,6 +70,8 @@ This produces a standalone =cclsh= binary in the repository root via
 (any (probe) (fallback))          ; probe || fallback
 (pipe (make) (to "build.log"))    ; make > build.log, append-to appends
 (pipe (from "in.txt") (wc "-l"))  ; wc -l < in.txt
+(pipe (make) (error-to "err.log")) ; make 2> err.log
+(capture (make) (merge-error))    ; both streams, like 2>&1 in $(...)
 (capture (git "rev-parse" "HEAD")) ; $(git rev-parse HEAD) as a string
 
 ;; Run a program directly, returns the exit status
@@ -99,6 +101,6 @@ long form, including login shell setup.
 * Not yet
 
 Job control (bg/fg/C-z), => < >>= characters in command mode (use the
-Lisp redirection stages), stderr redirection, script argv, and a
-right-side prompt. Multi-line history entries are recalled with
-newlines folded to spaces.
+Lisp redirection stages), script argv, and a right-side prompt.
+Multi-line history entries are recalled with newlines folded to
+spaces.
