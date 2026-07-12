@@ -36,6 +36,7 @@
            #:exit
            #:rehash
            #:commands
+           #:help
            #:export
            #:unset
            #:getenv
@@ -61,6 +62,7 @@
                           #:exit
                           #:rehash
                           #:commands
+                          #:help
                           #:export
                           #:unset
                           #:getenv

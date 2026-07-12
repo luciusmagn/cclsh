@@ -17,6 +17,7 @@
                  (:file "pipeline" :depends-on ("command"))
                  (:file "complete" :depends-on ("lexer" "command" "expand" "highlight"))
                  (:file "builtins" :depends-on ("command" "expand" "terminal" "history" "complete"))
+                 (:file "manual"   :depends-on ("command" "terminal"))
                  (:file "line-editor" :depends-on ("terminal" "lexer" "highlight" "history" "prompt" "complete"))
                  (:file "dispatch" :depends-on ("command" "expand" "lexer" "highlight" "complete"))
                  (:file "main"     :depends-on ("dispatch" "line-editor" "prompt" "builtins" "pipeline")))))
