@@ -133,6 +133,28 @@
                           (incf index)))))
         (flush-plain)))))
 
+(defun highlight--command-lisp (text)
+  "Recolor a :lisp substitution token: dim delimiters around Lisp mode
+   coloring of the body."
+  (let* ((start  (if (char= (char text 0) #\$) 2 1))
+         (closed (and (> (length text) start)
+                      (char= (char text (1- (length text))) #\))))
+         (end    (if closed (1- (length text)) (length text)))
+         (inner  (subseq text start end))
+         (tokens (lex-lisp-line inner))
+         (meaningful (remove ':space tokens :key #'token-type)))
+    (concatenate 'string
+                 (ansi-colorize (subseq text 0 start) ':bright-black)
+                 (highlight--lisp inner tokens
+                                  :head-first
+                                  (and (rest meaningful)
+                                       (eq (token-type (first meaningful))
+                                           ':symbol)
+                                       t))
+                 (if closed
+                     (ansi-colorize ")" ':bright-black)
+                     ""))))
+
 (defun highlight--command (line tokens)
   "Render LINE with command mode colors."
   (let* ((groups     (token-groups tokens))
@@ -151,6 +173,8 @@
                                highlighted))
                 ((eq (token-type token) ':word)
                  (write-string (highlight--command-word text) highlighted))
+                ((eq (token-type token) ':lisp)
+                 (write-string (highlight--command-lisp text) highlighted))
                 ((eq (token-type token) ':double-quote)
                  (write-string (highlight--double-quote text) highlighted))
                 ((eq (token-type token) ':single-quote)
@@ -185,11 +209,13 @@
           (t
            nil))))
 
-(defun highlight--lisp (line tokens)
+(defun highlight--lisp (line tokens &key head-first)
   "Render LINE with Lisp mode colors, tracking head position so the
-   symbol right after an open paren gets operator coloring."
+   symbol right after an open paren gets operator coloring. With
+   HEAD-FIRST the first symbol counts as a head, which substitution
+   bodies use to mirror their several-forms-are-a-call rule."
   (with-output-to-string (highlighted)
-    (let ((expect-head nil))
+    (let ((expect-head head-first))
       (dolist (token tokens)
         (let* ((type  (token-type token))
                (text  (token-text line token))

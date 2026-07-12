@@ -158,24 +158,41 @@
 
 ;;; Entry point
 
+(defun completion--token-at (tokens cursor)
+  "The non-space token containing CURSOR, or NIL."
+  (let ((found nil))
+    (dolist (token tokens found)
+      (when (and (not (eq (token-type token) ':space))
+                 (< (token-start token) cursor)
+                 (<= cursor (token-end token)))
+        (setf found token)))))
+
+(defun completion--lisp-matches (buffer cursor)
+  "Symbol completion at CURSOR, shared by Lisp mode and :lisp
+   substitutions inside command lines."
+  (multiple-value-bind (start prefix)
+      (completion--lisp-span buffer cursor)
+    (let ((matches (completion--symbols prefix)))
+      (values start matches matches))))
+
 (defun complete-line (buffer cursor)
   "Compute completions at CURSOR. Returns (values start candidates
    displays); each candidate replaces BUFFER between START and CURSOR."
   (if (line-lisp-p buffer)
-      (multiple-value-bind (start prefix)
-          (completion--lisp-span buffer cursor)
-        (let ((matches (completion--symbols prefix)))
-          (values start matches matches)))
-      (multiple-value-bind (start prefix command-position-p)
-          (completion--command-span buffer cursor)
-        (cond ((null start)
-               (values cursor nil nil))
-              ((and command-position-p (not (find #\/ prefix)))
-               (completion--commands-with-start start prefix))
-              (t
-               (multiple-value-bind (candidates displays)
-                   (completion--files prefix)
-                 (values start candidates displays)))))))
+      (completion--lisp-matches buffer cursor)
+      (let ((current (completion--token-at (lex-command-line buffer) cursor)))
+        (if (and current (eq (token-type current) ':lisp))
+            (completion--lisp-matches buffer cursor)
+            (multiple-value-bind (start prefix command-position-p)
+                (completion--command-span buffer cursor)
+              (cond ((null start)
+                     (values cursor nil nil))
+                    ((and command-position-p (not (find #\/ prefix)))
+                     (completion--commands-with-start start prefix))
+                    (t
+                     (multiple-value-bind (candidates displays)
+                         (completion--files prefix)
+                       (values start candidates displays)))))))))
 
 (defun completion--commands-with-start (start prefix)
   "Command candidates wrapped with their replacement START."

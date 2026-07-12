@@ -231,6 +231,58 @@
     (sort (remove-duplicates prefixes :test #'string=) #'string<)))
 
 
+;;; Lisp substitution
+
+(defun lisp-substitution--inner (text)
+  "Strip the delimiters from a :lisp token TEXT: a leading ( or $( and
+   the closing paren when present."
+  (let* ((start (if (char= (char text 0) #\$) 2 1))
+         (end   (if (and (> (length text) start)
+                         (char= (char text (1- (length text))) #\)))
+                    (1- (length text))
+                    (length text))))
+    (subseq text start end)))
+
+(defun lisp-substitution--forms (inner)
+  "Read all forms from the substitution body INNER."
+  (let ((forms    nil)
+        (position 0)
+        (eof      (list nil)))
+    (loop
+      (multiple-value-bind (form next)
+          (read-from-string inner nil eof :start position)
+        (when (eq form eof)
+          (return (nreverse forms)))
+        (push form forms)
+        (setf position next)))))
+
+(defun lisp-substitution-value (text)
+  "Evaluate the :lisp substitution TEXT and return its value. The
+   outer parens are shell delimiters: a single form inside evaluates
+   as written, so (*balls*) is the variable *balls*, while several
+   forms become one function call, so (+ 1 2) applies +."
+  (let ((forms (lisp-substitution--forms (lisp-substitution--inner text))))
+    (cond ((null forms)
+           nil)
+          ((null (rest forms))
+           (eval (first forms)))
+          (t
+           (eval forms)))))
+
+(defun lisp-substitution-words (text)
+  "Expand a standalone :lisp substitution into argument words: NIL
+   vanishes, a proper list splices into several words, anything else
+   is one PRINC-TO-STRINGed word."
+  (let ((value (lisp-substitution-value text)))
+    (cond ((null value)
+           nil)
+          ((and (listp value)
+                (ignore-errors (list-length value)))
+           (mapcar #'princ-to-string value))
+          (t
+           (list (princ-to-string value))))))
+
+
 ;;; Word level expansion
 
 (defun word-expand (text)
@@ -279,12 +331,18 @@
                         (incf index))))))))
 
 (defun token-expand (source token)
-  "Expand TOKEN into its literal argument text, without globbing."
+  "Expand TOKEN into its literal argument text, without globbing.
+   Inside a larger word a :lisp substitution concatenates: NIL becomes
+   an empty string, other values PRINC-TO-STRING."
   (let ((text (token-text source token)))
     (ecase (token-type token)
       (:word         (escape-remove (variable-expand (tilde-expand text))))
       (:double-quote (double-quote-expand (quote-strip text)))
-      (:single-quote (quote-strip text)))))
+      (:single-quote (quote-strip text))
+      (:lisp         (let ((value (lisp-substitution-value text)))
+                       (if (null value)
+                           ""
+                           (princ-to-string value)))))))
 
 
 ;;; Argument groups
@@ -304,16 +362,20 @@
     (nreverse groups)))
 
 (defun group-expand (source group)
-  "Expand one argument GROUP into a list of words. A group that is a
-   single bare word may glob into several words; groups with quotes
-   concatenate into exactly one."
-  (if (and (null (rest group))
-           (eq (token-type (first group)) ':word))
-      (word-expand (token-text source (first group)))
-      (list (apply #'concatenate 'string
-                   (mapcar (lambda (token)
-                             (token-expand source token))
-                           group)))))
+  "Expand one argument GROUP into a list of words. A single bare word
+   may glob into several words, a standalone :lisp substitution may
+   splice or vanish, and mixed groups concatenate into exactly one."
+  (cond ((and (null (rest group))
+              (eq (token-type (first group)) ':word))
+         (word-expand (token-text source (first group))))
+        ((and (null (rest group))
+              (eq (token-type (first group)) ':lisp))
+         (lisp-substitution-words (token-text source (first group))))
+        (t
+         (list (apply #'concatenate 'string
+                      (mapcar (lambda (token)
+                                (token-expand source token))
+                              group))))))
 
 (defun command-line-words (line)
   "Lex LINE and expand it into the final list of argument words."

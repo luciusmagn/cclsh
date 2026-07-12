@@ -27,10 +27,11 @@
 ;;; Command mode
 
 (defun lex-command-line (line)
-  "Lex LINE into :space, :word, :double-quote and :single-quote tokens.
-   Tokens cover the whole line and quote tokens include their quotes.
-   Returns (values tokens open) where OPEN is the type of an
-   unterminated quote token, or NIL."
+  "Lex LINE into :space, :word, :double-quote, :single-quote and :lisp
+   tokens. Tokens cover the whole line; quote tokens include their
+   quotes and :lisp tokens their delimiting parens (plus a leading $
+   for the $(form) spelling). Returns (values tokens open) where OPEN
+   is the type of an unterminated quote or substitution, or NIL."
   (let ((tokens nil)
         (index  0)
         (length (length line))
@@ -61,6 +62,53 @@
                    (setf open type)))
                (emit type start index))
 
+             (lisp-opener-p ()
+               (or (char= (char line index) #\()
+                   (and (char= (char line index) #\$)
+                        (< (1+ index) length)
+                        (char= (char line (1+ index)) #\())))
+
+             (scan-lisp (start)
+               (when (char= (char line index) #\$)
+                 (incf index))
+               (incf index)
+               (let ((depth 1))
+                 (loop while (and (< index length) (plusp depth))
+                       do (let ((char (char line index)))
+                            (cond ((char= char #\()
+                                   (incf depth)
+                                   (incf index))
+                                  ((char= char #\))
+                                   (decf depth)
+                                   (incf index))
+                                  ((char= char #\")
+                                   (incf index)
+                                   (loop while (< index length)
+                                         do (let ((inner (char line index)))
+                                              (cond ((char= inner #\\)
+                                                     (incf index
+                                                           (if (< (1+ index) length)
+                                                               2
+                                                               1)))
+                                                    ((char= inner #\")
+                                                     (incf index)
+                                                     (return))
+                                                    (t
+                                                     (incf index))))))
+                                  ((and (char= char #\#)
+                                        (< (1+ index) length)
+                                        (char= (char line (1+ index)) #\\))
+                                   (incf index 2)
+                                   (when (< index length)
+                                     (incf index)))
+                                  ((char= char #\;)
+                                   (setf index length))
+                                  (t
+                                   (incf index)))))
+                 (when (plusp depth)
+                   (setf open ':lisp)))
+               (emit ':lisp start index))
+
              (scan-word (start)
                (loop while (< index length)
                      do (let ((char (char line index)))
@@ -68,7 +116,8 @@
                                  (incf index (if (< (1+ index) length) 2 1)))
                                 ((or (whitespace-char-p char)
                                      (char= char #\")
-                                     (char= char #\'))
+                                     (char= char #\')
+                                     (lisp-opener-p))
                                  (return))
                                 (t
                                  (incf index)))))
@@ -82,6 +131,8 @@
                         (scan-quoted start #\" ':double-quote))
                        ((char= char #\')
                         (scan-quoted start #\' ':single-quote))
+                       ((lisp-opener-p)
+                        (scan-lisp start))
                        (t
                         (scan-word start)))))
       (values (nreverse tokens) open))))
