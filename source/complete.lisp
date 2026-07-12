@@ -39,14 +39,18 @@
                  :test #'string=)))
     names))
 
+(defparameter *completion-escaped-characters*
+  (list #\space #\tab #\newline #\return #\" #\' #\\ #\$ #\* #\? #\()
+  "Characters that would split or expand a completed word: whitespace,
+   quotes, backslashes, variable references, glob wildcards and the
+   Lisp substitution paren.")
+
 (defun completion--escape (text)
-  "Backslash escape characters that would split or expand TEXT when it
-   is typed back into a command line: whitespace, quotes, backslashes,
-   variable references, glob wildcards and the Lisp substitution
-   paren."
+  "Backslash escape the special characters in TEXT so it survives
+   being typed back into a command line."
   (with-output-to-string (escaped)
     (loop for char across text
-          do (when (find char " 	\"'\\$*?(")
+          do (when (member char *completion-escaped-characters*)
                (write-char #\\ escaped))
              (write-char char escaped))))
 
@@ -121,12 +125,16 @@
              (when (and (string-prefix-p base name)
                         (or (not (string-prefix-p "." name))
                             (string-prefix-p "." base)))
-               (let ((tail (if directory-p "/" "")))
-                 (push (cons (concatenate 'string
-                                          (completion--escape
-                                           (concatenate 'string
-                                                        directory-part name))
-                                          tail)
+               (let* ((tail    (if directory-p "/" ""))
+                      (escaped (completion--escape
+                                (concatenate 'string directory-part name)))
+                      ;; A bare name starting with ~ needs a guard so a
+                      ;; file literally named ~ cannot tilde-expand.
+                      (guarded (if (and (string= directory-part "")
+                                        (char= (char name 0) #\~))
+                                   (concatenate 'string "\\" escaped)
+                                   escaped)))
+                 (push (cons (concatenate 'string guarded tail)
                              (concatenate 'string name tail))
                        pairs)))))
       (multiple-value-bind (files subdirectories)
