@@ -251,8 +251,11 @@ cclsh as a login shell; the string uses cclsh syntax, not sh.")
    (shell \"/home/mag/.local/bin/cclsh\"))
 
 Unknown flags are ignored so odd login invocations cannot lock you
-out, builds are atomic, and the binary sets SHELL to itself. Nothing
-sources /etc/profile for you, so own PATH at the top of startup.lisp:
+out, builds are atomic, and the binary sets SHELL to itself. Keep ccl
+installed in your Guix profile: the binary links glibc from the store
+through CCL's closure, and guix gc could otherwise collect it out
+from under your login. Nothing sources /etc/profile for you, so own
+PATH at the top of startup.lisp:
 
   (setenv 'path (format nil \"~a/.local/bin:~a\"
                         (getenv 'home) (getenv 'path)))

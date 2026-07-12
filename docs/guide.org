@@ -383,8 +383,14 @@ Recommendations, in order:
 2. Point the login shell at =~/.local/bin/cclsh= (a real copy managed
    by =scripts/install=), never at the repository binary, which is one
    =git clean -fdx= away from disappearing.
-3. Keep =root= (or one other account) on a stock shell.
-4. As a login shell, nothing sources =/etc/profile= for you. Own your
+3. Keep =ccl= installed in your Guix profile. The binary dynamically
+   links glibc from =/gnu/store= through CCL's closure (check with
+   =ldd ~/.local/bin/cclsh=); if ccl leaves every profile generation
+   and =guix gc= runs, the login shell dies with "no such file or
+   directory". Rebuild and reinstall after a =guix upgrade= that
+   changes ccl.
+4. Keep =root= (or one other account) on a stock shell.
+5. As a login shell, nothing sources =/etc/profile= for you. Own your
    environment at the top of =startup.lisp=:
 
 #+begin_src lisp
