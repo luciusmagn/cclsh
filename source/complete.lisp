@@ -41,10 +41,12 @@
 
 (defun completion--escape (text)
   "Backslash escape characters that would split or expand TEXT when it
-   is typed back into a command line."
+   is typed back into a command line: whitespace, quotes, backslashes,
+   variable references, glob wildcards and the Lisp substitution
+   paren."
   (with-output-to-string (escaped)
     (loop for char across text
-          do (when (find char " 	\"'\\$*?")
+          do (when (find char " 	\"'\\$*?(")
                (write-char #\\ escaped))
              (write-char char escaped))))
 
