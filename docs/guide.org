@@ -218,6 +218,33 @@ Lisp expressions (so variables work; bare words do not), and the exit
 status comes back. =run= is its function counterpart when the program
 name itself is computed.
 
+Redirection is spelled as stages, recognized by name inside =pipe= and
+=capture=: =(from "file")= first feeds standard input, =(to "file")=
+or =(append-to "file")= last writes the output. =capture= returns the
+output as a string with trailing newlines trimmed, which is sh's
+=$(cmd)=, and composes with Lisp substitution:
+
+#+begin_src lisp
+(pipe (make) (to "build.log"))            ; make > build.log
+(pipe (make "install") (append-to "build.log"))
+(pipe (from "access.log") (grep "500") (wc "-l"))
+(pipe (from "a.bin") (to "b.bin"))        ; byte-exact file copy
+
+(capture (git "rev-parse" "HEAD"))        ; "3e45271..." as a string
+(defvar *head* (capture (git "rev-parse" "--short" "HEAD")))
+#+end_src
+
+And from the command line, capture inside a substitution:
+
+#+begin_src sh
+echo deployed (capture (git rev-parse "--short" HEAD))
+#+end_src
+
+(note =rev-parse= and =HEAD= are evaluated stage arguments, so bare
+symbols only work when bound; strings are the safe spelling). File
+redirection is byte-transparent; =capture= decodes UTF-8. Standard
+error always goes to the terminal for now.
+
 Each returns the deciding exit status and records it in
 =*last-status*=. Builtin commands can appear inside =pipe= as well;
 their output is buffered and streamed to the next stage.
@@ -379,8 +406,9 @@ config change) restores fish, and a root TTY login works regardless.
 - No job control: no =bg=, =fg= or =jobs=, and Ctrl-Z will stop the
   foreground child with no way to resume it from the shell (use
   =kill -CONT= from elsewhere).
-- No redirection syntax in command mode; capture or redirect through
-  Lisp instead.
+- No => < >>= characters in command mode; redirection is Lisp:
+  =(to ...)=, =(append-to ...)=, =(from ...)= and =(capture ...)=.
+  Standard error cannot be redirected yet.
 - =-c= strings and scripts use cclsh syntax, not sh; complex remote
   commands may need =sh -c= spelled explicitly.
 - Script arguments (argv for scripts) are not passed yet.

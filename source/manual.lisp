@@ -137,9 +137,19 @@ are evaluated expressions:
   (defcommand emit () (format t \"b~%a~%\") 0)
   (pipe (emit) (sort))                 builtins can sit in pipes
 
+Redirection is spelled as stages, and capture returns output as a
+string (sh's $(cmd)), trailing newlines trimmed:
+
+  (pipe (make) (to \"build.log\"))       make > build.log
+  (pipe (make) (append-to \"build.log\"))  make >> build.log
+  (pipe (from \"in.txt\") (wc \"-l\"))     wc -l < in.txt
+  (pipe (from \"a.bin\") (to \"b.bin\"))   byte-exact file copy
+  (capture (git \"rev-parse\" \"HEAD\"))   \"3e45271...\"
+  echo (capture (hostname))            capture inside substitution
+
 Each returns the deciding exit status and records *last-status*. The
 first stage owns the terminal, so Ctrl-C interrupts the pipeline from
-its head.")
+its head. Standard error always goes to the terminal for now.")
 
     ("editing" "keys, completion and colors"
      "Tab completes command names in command position, file paths

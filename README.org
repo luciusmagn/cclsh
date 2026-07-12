@@ -62,12 +62,15 @@ This produces a standalone =cclsh= binary in the repository root via
 * Lisp helpers
 
 #+begin_src lisp
-;; Pipelines, sequencing, and conditional chains
+;; Pipelines, sequencing, conditional chains, redirection
 (cmd git "status")                ; one command, mid-Lisp
 (pipe (ls "-la") (grep "lisp"))   ; ls -la | grep lisp
 (seq (make "clean") (make))       ; make clean ; make
 (all (make) (make "install"))     ; make && make install
 (any (probe) (fallback))          ; probe || fallback
+(pipe (make) (to "build.log"))    ; make > build.log, append-to appends
+(pipe (from "in.txt") (wc "-l"))  ; wc -l < in.txt
+(capture (git "rev-parse" "HEAD")) ; $(git rev-parse HEAD) as a string
 
 ;; Run a program directly, returns the exit status
 (run "git" "status")
@@ -95,6 +98,7 @@ long form, including login shell setup.
 
 * Not yet
 
-Job control (bg/fg/C-z), redirection syntax in command mode, script
-argv, and a right-side prompt. Multi-line history entries are recalled
-with newlines folded to spaces.
+Job control (bg/fg/C-z), => < >>= characters in command mode (use the
+Lisp redirection stages), stderr redirection, script argv, and a
+right-side prompt. Multi-line history entries are recalled with
+newlines folded to spaces.
