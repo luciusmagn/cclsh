@@ -105,6 +105,7 @@
    prompt render or a flaky read."
   (terminal-encoding-setup)
   (terminal-signals-setup)
+  (terminal-shell-attributes-save)
   (environment-setup)
   (let ((safe (shell-safe-mode-p)))
     (unless safe
@@ -123,7 +124,9 @@
                                     (throw 'cclsh-toplevel nil))))
                 (multiple-value-bind (line kind)
                     (if interactive
-                        (shell-read-interactive duration)
+                        (progn
+                          (jobs-notify)
+                          (shell-read-interactive duration))
                         (shell-read-plain))
                   (ecase kind
                     (:eof
@@ -159,6 +162,7 @@
    access."
   (terminal-encoding-setup)
   (terminal-signals-setup)
+  (terminal-shell-attributes-save)
   (environment-setup)
   (let ((*package* (find-package '#:cclsh-user)))
     (dispatch-line command))
@@ -171,6 +175,7 @@
    first argument."
   (terminal-encoding-setup)
   (terminal-signals-setup)
+  (terminal-shell-attributes-save)
   (environment-setup)
   (let ((*package* (find-package '#:cclsh-user)))
     (handler-case

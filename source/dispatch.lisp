@@ -90,12 +90,14 @@
             *last-status*
             (multiple-value-bind (kind target)
                 (command-resolve-fresh (first words))
-              (ecase kind
-                (:builtin  (command-execute-builtin target (rest words)))
-                (:external (command-execute-external target (rest words)))
-                (:unknown  (or (dispatch--lone-value-status line)
-                               (error 'command-not-found-error
-                                      :name (first words))))))))
+              (let ((*job-command-label*
+                      (string-trim *whitespace-characters* line)))
+                (ecase kind
+                  (:builtin  (command-execute-builtin target (rest words)))
+                  (:external (command-execute-external target (rest words)))
+                  (:unknown  (or (dispatch--lone-value-status line)
+                                 (error 'command-not-found-error
+                                        :name (first words)))))))))
     (shell-error (condition)
       (dispatch-report-error condition)
       127)
