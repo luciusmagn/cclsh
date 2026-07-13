@@ -450,6 +450,30 @@ printf '%s\\n' \"$1\"
      "saved image has no working QL:QUICKLOAD: ~a"
      (integration-tail output))))
 
+(defun integration-check-baked-clinedi ()
+  "Require the saved image to contain the pinned Clinedi implementation."
+  (let* ((result
+           (integration-run
+            "(let* ((package (find-package \"CLINEDI\"))
+                    (editor (and package (find-symbol \"EDIT-LINE\" package)))
+                    (width-function
+                      (and package
+                           (find-symbol \"TEXT-CELL-WIDTH\" package)))
+                    (width (and width-function (fboundp width-function)
+                                (funcall width-function \"猫\")))
+                    (commit cclsh:*cclsh-build-clinedi-commit*)
+                    (available (and editor (fboundp editor)
+                                    (= width 2)
+                                    (stringp commit)
+                                    (= (length commit) 40))))
+               (format t \"__BAKED_CLINEDI__~s__~%\" available))"))
+         (output (direct-result-output result)))
+    (integration-require-success result "baked Clinedi")
+    (integration-ensure
+     (integration-contains-p "__BAKED_CLINEDI__T__" output)
+     "saved image has no pinned working Clinedi: ~a"
+     (integration-tail output))))
+
 (defun integration-check-no-polling ()
   "Require process and job state changes to be event driven."
   (dolist (path '("source/process.lisp"
@@ -1504,6 +1528,8 @@ printf '%s\\n' \"$1\"
                         #'integration-check-image-startup)
       (integration-test "Quicklisp baked into saved image"
                         #'integration-check-baked-quicklisp)
+      (integration-test "Clinedi baked into saved image"
+                        #'integration-check-baked-clinedi)
       (integration-test "event-driven child state"
                         #'integration-check-no-polling)
       (integration-test "one process group per pipeline"

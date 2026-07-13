@@ -4,9 +4,13 @@
 # after both are complete, so an interrupted build preserves the old pair.
 set -e
 cd "$(dirname "$0")/.."
+validation_home=
 cleanup_staged_build()
 {
     rm -f cclsh.new cclsh.image.new
+    if [ -n "$validation_home" ]; then
+        rm -rf -- "$validation_home"
+    fi
 }
 trap cleanup_staged_build 0
 trap 'exit 129' 1
@@ -36,22 +40,77 @@ if [ -e "$validation_home" ]; then
     echo "cclsh build: validation HOME already exists: $validation_home" >&2
     exit 1
 fi
-if ! HOME="$validation_home" \
+if ! IFS= read -r dependency_line < dependencies.lock; then
+    echo "cclsh build: could not read dependencies.lock" >&2
+    exit 1
+fi
+expected_clinedi_commit=${dependency_line#clinedi=}
+if [ "$dependency_line" = "$expected_clinedi_commit" ] ||
+   [ "${#expected_clinedi_commit}" -ne 40 ]
+then
+    echo "cclsh build: dependencies.lock has no full Clinedi commit" >&2
+    exit 1
+fi
+case "$expected_clinedi_commit" in
+    *[!0123456789abcdef]*)
+        echo "cclsh build: dependencies.lock has an invalid Clinedi commit" >&2
+        exit 1
+        ;;
+esac
+mkdir "$validation_home"
+build_root=$PWD
+if ! (
+     cd "$validation_home"
+     HOME="$validation_home" \
      CCLSH_SAFE=1 \
      CCLSH_QUICKLISP_SETUP="$validation_home/setup.lisp" \
+     CCLSH_EXPECTED_CLINEDI_COMMIT="$expected_clinedi_commit" \
      LANG=C \
      LC_ALL=C \
-     ./cclsh.new -I ./cclsh.image.new -c \
-     '(let* ((package (find-package "QL"))
-             (quickload (and package (find-symbol "QUICKLOAD" package))))
+     "$build_root/cclsh.new" -I "$build_root/cclsh.image.new" -c \
+     '(let* ((quicklisp-package (find-package "QL"))
+             (quickload
+               (and quicklisp-package
+                    (find-symbol "QUICKLOAD" quicklisp-package)))
+             (local-directories
+               (and quicklisp-package
+                    (find-symbol "*LOCAL-PROJECT-DIRECTORIES*"
+                                 quicklisp-package)))
+             (clinedi-package (find-package "CLINEDI"))
+             (edit-line
+               (and clinedi-package
+                    (find-symbol "EDIT-LINE" clinedi-package)))
+             (text-cell-width
+               (and clinedi-package
+                    (find-symbol "TEXT-CELL-WIDTH" clinedi-package)))
+             (expected
+               (cclsh:getenv "CCLSH_EXPECTED_CLINEDI_COMMIT")))
+        (when local-directories
+          (setf (symbol-value local-directories)
+                (list #P"/definitely/missing/clinedi-local-projects/")))
+        (let ((clear-system (find-symbol "CLEAR-SYSTEM" "ASDF")))
+          (when (and clear-system (fboundp clear-system))
+            (funcall clear-system "clinedi")))
         (unless (and quickload (fboundp quickload))
           (error "saved image does not provide QL:QUICKLOAD"))
+        (unless (and edit-line (fboundp edit-line)
+                     text-cell-width (fboundp text-cell-width)
+                     (= 4 (funcall text-cell-width "你好")))
+          (error "saved image does not contain functional Clinedi code"))
+        (unless (and expected
+                     (string= expected
+                              cclsh:*cclsh-build-clinedi-commit*))
+          (error "saved image Clinedi commit ~s does not match lock ~s"
+                 cclsh:*cclsh-build-clinedi-commit* expected))
         (values))'
+     )
 then
     echo "cclsh build: staged saved-image validation failed" >&2
     exit 1
 fi
 mv -f cclsh.image.new cclsh.image
 mv -f cclsh.new cclsh
+rm -rf -- "$validation_home"
+validation_home=
 trap - 0 1 2 15
 echo "Built ./cclsh and ./cclsh.image"

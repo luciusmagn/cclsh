@@ -20,9 +20,39 @@ do
     fi
 done
 
-if find source cclsh.asd -type f -newer ./cclsh.image -print -quit | grep -q .
+if find source cclsh.asd dependencies.lock -type f -newer ./cclsh.image \
+        -print -quit | grep -q .
 then
     echo "cclsh integration: ./cclsh.image is stale; run scripts/build first" >&2
+    exit 2
+fi
+
+if ! IFS= read -r dependency_line < dependencies.lock; then
+    echo "cclsh integration: could not read dependencies.lock" >&2
+    exit 2
+fi
+expected_clinedi_commit=${dependency_line#clinedi=}
+if [ "$dependency_line" = "$expected_clinedi_commit" ] ||
+   [ "${#expected_clinedi_commit}" -ne 40 ]
+then
+    echo "cclsh integration: dependencies.lock is invalid" >&2
+    exit 2
+fi
+case "$expected_clinedi_commit" in
+    *[!0123456789abcdef]*)
+        echo "cclsh integration: dependencies.lock is invalid" >&2
+        exit 2
+        ;;
+esac
+if ! CCLSH_SAFE=1 \
+     CCLSH_EXPECTED_CLINEDI_COMMIT="$expected_clinedi_commit" \
+     ./cclsh -c \
+     '(unless (string= cclsh:*cclsh-build-clinedi-commit*
+                       (cclsh:getenv "CCLSH_EXPECTED_CLINEDI_COMMIT"))
+        (error "saved image has stale Clinedi revision"))' \
+     >/dev/null 2>&1
+then
+    echo "cclsh integration: ./cclsh.image has stale Clinedi code; run scripts/build first" >&2
     exit 2
 fi
 
