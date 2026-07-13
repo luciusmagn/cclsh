@@ -257,7 +257,7 @@ and =merge-error= are mutually exclusive.
 
 Each returns the deciding exit status and records it in
 =*last-status*=. Builtin commands can appear inside =pipe= as well;
-their output is buffered and streamed to the next stage.
+they run concurrently and stream output to the next stage.
 
 * Job control
 
@@ -289,8 +289,9 @@ Details worth knowing:
 - A stopped job remembers the terminal modes it was using and gets
   them back under =fg=, so stopping =vim=, running other commands and
   resuming works.
-- Every pipeline stage runs in its own process group, so a stop is
-  carried across all stages and =fg= and =bg= continue them all.
+- Every external stage in a pipeline shares one process group. Builtin
+  workers stop, resume and terminate with that group, so =fg= and =bg=
+  control the pipeline as one job.
 - A =capture= cannot stop, because the shell itself is reading its
   output: Ctrl-Z prints a notice and the capture keeps running.
 - =exit= and Ctrl-D warn once when stopped jobs would be left behind;
@@ -468,9 +469,10 @@ config change) restores fish, and a root TTY login works regardless.
 
 * Current limitations
 
-- Ctrl-Z stops external commands and pipelines, not builtins or Lisp
-  evaluation: those run inside the shell process itself, and stopping
-  a busy Lisp form with Ctrl-Z stops the whole shell.
+- Ctrl-Z stops external commands and pipelines, including builtin
+  stages inside a pipeline. Standalone builtins and other Lisp
+  evaluation run inside the shell process, so stopping a busy form
+  stops the whole shell.
 - No => < >>= characters in command mode; redirection is Lisp:
   =(to ...)=, =(append-to ...)=, =(from ...)=, =(error-to ...)=,
   =(merge-error)= and =(capture ...)=.

@@ -154,9 +154,9 @@ string (sh's $(cmd)), trailing newlines trimmed:
 Error redirection applies to every stage, builtins included, and
 merge-error sends standard error wherever the ordinary output goes.
 Each pipeline returns the deciding exit status and records
-*last-status*. The first stage owns the terminal, so Ctrl-C interrupts
-the pipeline from its head, and Ctrl-Z stops the whole pipeline as
-one job, see jobs.")
+*last-status*. The pipeline owns the terminal as one job, so Ctrl-C
+interrupts every stage and Ctrl-Z stops the whole pipeline together,
+see jobs.")
 
     ("jobs" "background jobs, fg, bg and Ctrl-Z"
      "Background and stopped commands are jobs:
@@ -176,11 +176,13 @@ stopped job was using, so Ctrl-Z out of vim and back just works.
 Ctrl-Z stops a whole pipeline as one job; a capture continues through
 Ctrl-Z with a notice, since the shell itself is reading its output.
 
-Builtins and Lisp forms run inside the shell process: & reports an
-error for them, and Ctrl-Z during a busy Lisp evaluation stops the
-shell itself, so avoid that one. exit with stopped jobs warns once,
-exit again to leave anyway. jobs, fg and bg are ordinary functions
-too: (fg 1) resumes job 1 from Lisp.")
+Standalone builtins and Lisp forms run inside the shell process, so &
+reports an error for them. Builtin stages inside pipe are controlled
+with the rest of their pipeline and can be stopped and resumed. Ctrl-Z
+during another busy Lisp evaluation stops the shell itself, so avoid
+that one. exit with stopped jobs warns once, exit again to leave anyway.
+jobs, fg and bg are ordinary functions too: (fg 1) resumes job 1 from
+Lisp.")
 
     ("editing" "keys, completion and colors"
      "Tab completes command names in command position, file paths

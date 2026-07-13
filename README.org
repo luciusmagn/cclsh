@@ -38,6 +38,14 @@ Run the regression checks with:
 scripts/check
 #+end_src
 
+After process, pipeline or terminal changes, rebuild the saved image and
+run the PTY integration checks too:
+
+#+begin_src sh
+scripts/build
+scripts/integration-check
+#+end_src
+
 * Behavior
 
 - A line starting with =(= is evaluated as Lisp in the =cclsh-user=
