@@ -14,7 +14,7 @@
                  (:file "expand"   :depends-on ("lexer" "command" "environment"))
                  (:file "highlight" :depends-on ("terminal" "lexer" "command" "expand"))
                  (:file "history"  :depends-on ("lexer" "environment"))
-                 (:file "prompt"   :depends-on ("terminal" "command" "expand" "environment"))
+                 (:file "prompt"   :depends-on ("terminal" "command" "expand" "environment" "jobs"))
                  (:file "pipeline" :depends-on ("command" "jobs"))
                  (:file "complete" :depends-on ("lexer" "command" "expand" "highlight"))
                  (:file "builtins" :depends-on ("command" "jobs" "expand" "terminal" "history" "complete"))

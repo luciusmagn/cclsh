@@ -38,6 +38,9 @@
            #:rehash
            #:commands
            #:help
+           #:jobs
+           #:fg
+           #:bg
            #:export
            #:unset
            #:getenv
@@ -65,6 +68,9 @@
                           #:rehash
                           #:commands
                           #:help
+                          #:jobs
+                          #:fg
+                          #:bg
                           #:export
                           #:unset
                           #:getenv

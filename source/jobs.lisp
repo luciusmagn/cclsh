@@ -367,6 +367,110 @@
       (force-output *error-output*))
     0))
 
+;;; Job builtins
+
+(defun jobs-count ()
+  "Number of jobs in the job table, reported to the prompt."
+  (length *jobs*))
+
+(defun job-find (spec)
+  "Find a job by SPEC: NIL, % and %+ mean the current job, %- the
+   previous one, an integer (with optional %) a job id, and any other
+   %text the most current job whose command starts with text. Returns
+   NIL when nothing matches."
+  (let ((text (and spec (princ-to-string spec))))
+    (cond ((or (null text)
+               (string= text "%")
+               (string= text "%+")
+               (string= text "%%"))
+           (job-current))
+          ((string= text "%-")
+           (second (jobs--ordered)))
+          (t
+           (let ((bare (if (and (plusp (length text))
+                                (char= (char text 0) #\%))
+                           (subseq text 1)
+                           text)))
+             (multiple-value-bind (id end)
+                 (parse-integer bare :junk-allowed t)
+               (if (and id (= end (length bare)))
+                   (find id *jobs* :key #'job-id)
+                   (find-if (lambda (job)
+                              (let ((command (job-command job)))
+                                (and (<= (length bare) (length command))
+                                     (string= bare command
+                                              :end2 (length bare)))))
+                            (jobs--ordered)))))))))
+
+(defun job--complain (builtin spec)
+  "Report a job lookup failure for BUILTIN and return its exit status."
+  (format *error-output* "~a~%"
+          (ansi-colorize (if spec
+                             (format nil "~a: no such job: ~a" builtin spec)
+                             (format nil "~a: no current job" builtin))
+                         ':red))
+  (force-output *error-output*)
+  1)
+
+(defcommand jobs (&rest arguments)
+  "List active jobs: id, the current + and previous - marks, status
+   and command. jobs -l adds each job's process group id."
+  (let ((show-pid (equal arguments '("-l"))))
+    (cond ((and arguments (not show-pid))
+           (format *error-output* "~a~%"
+                   (ansi-colorize "jobs: the only supported option is -l"
+                                  ':red))
+           1)
+          (t
+           (dolist (job (sort (copy-list *jobs*) #'< :key #'job-id))
+             (let ((status (job-refresh job)))
+               (job-print job *standard-output* :show-pid show-pid)
+               (setf (job-reported job) status)
+               (when (eq status ':done)
+                 (job-unregister job))))
+           0))))
+
+(defcommand fg (&optional spec)
+  "Resume a stopped or background job in the foreground. SPEC picks
+   the job like jobs shows it: %1, 1, %- or a command prefix; without
+   it the current job resumes."
+  (let ((job (job-find spec)))
+    (cond ((null job)
+           (job--complain "fg" spec))
+          ((eq (job-refresh job) ':done)
+           (job--complain "fg" (or spec (job-id job))))
+          (t
+           (job-touch job)
+           (format t "~a~%" (job-command job))
+           (force-output)
+           (job-run-foreground job :continue t)))))
+
+(defcommand bg (&optional spec)
+  "Resume a stopped job in the background, as if it had been launched
+   with a trailing &. SPEC picks the job like fg."
+  (let ((job (job-find spec)))
+    (cond ((null job)
+           (job--complain "bg" spec))
+          ((eq (job-refresh job) ':done)
+           (job--complain "bg" (or spec (job-id job))))
+          ((eq (job-status job) ':running)
+           (format *error-output* "~a~%"
+                   (ansi-colorize
+                    (format nil "bg: job [~d] is already running"
+                            (job-id job))
+                    ':red))
+           (force-output *error-output*)
+           0)
+          (t
+           (job-touch job)
+           (job--continue-processes job)
+           (setf (job-status job) ':running)
+           (setf (job-reported job) ':running)
+           (format t "[~d]~a ~a &~%"
+                   (job-id job) (job-mark job) (job-command job))
+           (force-output)
+           0))))
+
 (defun run (program &rest arguments)
   "Run PROGRAM with ARGUMENTS in the foreground and return its exit
    status. PROGRAM is a symbol or a string, arguments are stringified

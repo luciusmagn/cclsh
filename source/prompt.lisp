@@ -15,7 +15,7 @@
                               (format nil "--status=~d" status)
                               (format nil "--cmd-duration=~d" duration-milliseconds)
                               (format nil "--terminal-width=~d" columns)
-                              "--jobs=0"))
+                              (format nil "--jobs=~d" (jobs-count))))
              (process   (run-program "starship" arguments
                                      :input  nil
                                      :output output
