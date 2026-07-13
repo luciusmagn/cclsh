@@ -261,6 +261,151 @@
                cclsh:*last-status*))
 
 
+;;;; -- Job aggregation --
+
+(check-equal "stopped external group wins over a live Lisp task"
+             ':stopped
+             (cclsh::job--aggregate-state '(:done :stopped) nil))
+(check-equal "finished externals wait for a live Lisp task"
+             ':running
+             (cclsh::job--aggregate-state '(:done :done) nil))
+(check-equal "job finishes after external and Lisp tasks"
+             ':done
+             (cclsh::job--aggregate-state '(:done :done) t))
+
+(let ((done nil)
+      (job  (cclsh::job-make)))
+  (cclsh::job-add-auxiliary job (lambda () done))
+  (check-equal "live auxiliary keeps an empty job running"
+               ':running
+               (cclsh::job-refresh job))
+  (setf done t)
+  (check-equal "completed auxiliary lets an empty job finish"
+               ':done
+               (cclsh::job-refresh job)))
+
+(let ((job
+        (cclsh::job-make
+         :result-provider (lambda () (values ':signaled 2)))))
+  (setf (cclsh::job-status job) ':done)
+  (check-equal "logical final stage supplies resumed job status"
+               130
+               (cclsh::job-exit-status job))
+  (check-equal "logical final stage supplies job display status"
+               "Interrupt"
+               (cclsh::job--status-text job)))
+
+(let* ((callers      20)
+       (job          (cclsh::job-make :command "concurrent startup"))
+       (event        (cclsh::job-event job))
+       (process      nil)
+       (start-gate   (ccl:make-semaphore))
+       (all-returned (ccl:make-semaphore))
+       (result-lock  (ccl:make-lock "monitor startup results"))
+       (returned     0)
+       (failures     nil)
+       (threads      nil))
+  (unwind-protect
+      (progn
+        ;; Keep the child alive so child events cannot accidentally wake
+        ;; startup callers stranded on the job's transition semaphore.
+        (setf process
+              (cclsh::shell-process-spawn
+               "/usr/bin/sleep" (list "30")
+               :process-group 0 :event event))
+        (setf (cclsh::job-processes job) (list process)
+              (cclsh::job-process-group job)
+              (cclsh::shell-process-pid process))
+        (loop repeat callers
+              do (push
+                  (ccl:process-run-function
+                   "concurrent monitor starter"
+                   (lambda ()
+                     (ccl:wait-on-semaphore start-gate)
+                     (let ((failure nil))
+                       (handler-case
+                           (cclsh::job-start-monitors job)
+                         (error (condition)
+                           (setf failure condition)))
+                       (ccl:with-lock-grabbed (result-lock)
+                         (when failure
+                           (push (princ-to-string failure) failures))
+                         (incf returned)
+                         (when (= returned callers)
+                           (ccl:signal-semaphore all-returned))))))
+                  threads))
+        (loop repeat callers
+              do (ccl:signal-semaphore start-gate))
+        (ccl:timed-wait-on-semaphore all-returned 3)
+        (check-equal "concurrent monitor startup returns every caller"
+                     callers
+                     (ccl:with-lock-grabbed (result-lock) returned))
+        (check-equal "concurrent monitor startup has no failures"
+                     nil
+                     (ccl:with-lock-grabbed (result-lock)
+                       (copy-list failures))))
+    (dolist (thread threads)
+      (when (ccl::process-active-p thread)
+        (ignore-errors (ccl:process-kill thread)))
+      (ignore-errors (ccl:join-process thread)))
+    (when process
+      (ignore-errors (cclsh::job--kill-reap job)))))
+
+(let* ((started (ccl:make-semaphore))
+       (blocker (ccl:make-semaphore))
+       (job     (cclsh::job-make :command "anchor signal"))
+       (group   (cclsh::make-pipeline-task-group :job job))
+       (anchor  (cclsh::process--make 1))
+       (task
+         (cclsh::make-pipeline-task
+          :name "anchor-controlled task"
+          :group group
+          :function (lambda ()
+                      (ccl:signal-semaphore started)
+                      (ccl:wait-on-semaphore blocker)
+                      (values 0 nil))))
+       (thread nil))
+  (setf (cclsh::pipeline-task-group-tasks group) (list task)
+        (cclsh::pipeline-task-group-anchor-process group) anchor)
+  (unwind-protect
+      (progn
+        (setf thread
+              (ccl:process-run-function
+               "anchor-controlled task"
+               #'cclsh::pipeline--run-task task)
+              (cclsh::pipeline-task-thread task) thread)
+        (check-equal "anchor-controlled task starts"
+                     t
+                     (not (null
+                           (ccl:timed-wait-on-semaphore started 2))))
+        (ccl:with-lock-grabbed ((cclsh::shell-process-lock anchor))
+          (setf (cclsh::shell-process-state anchor) ':signaled
+                (cclsh::shell-process-code anchor)
+                cclsh::+process-sigpipe+))
+        (cclsh::pipeline--tasks-lifecycle-done-p group)
+        (check-equal "anchor SIGPIPE does not cancel Lisp tasks"
+                     nil
+                     (cclsh::pipeline-task-group-aborted group))
+        (ccl:with-lock-grabbed ((cclsh::shell-process-lock anchor))
+          (setf (cclsh::shell-process-code anchor) 15))
+        (cclsh::pipeline--tasks-lifecycle-done-p group)
+        (ccl:join-process thread)
+        (setf thread nil)
+        (check-equal "fatal anchor signal completes Lisp task"
+                     t
+                     (cclsh::pipeline-task-done task))
+        (check-equal "fatal anchor signal supplies Lisp task state"
+                     ':signaled
+                     (cclsh::pipeline-task-state task))
+        (check-equal "fatal anchor signal supplies Lisp task code"
+                     15
+                     (cclsh::pipeline-task-code task)))
+    (when (and thread (ccl::process-active-p thread))
+      (ignore-errors
+        (cclsh::pipeline--abort-tasks group :signal 9))
+      (ignore-errors (ccl:join-process thread)))))
+
+
 ;;;; -- Result --
 
 (cond (*check-failures*
