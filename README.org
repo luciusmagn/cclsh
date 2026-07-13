@@ -7,16 +7,30 @@ Unix command or a Lisp form, evaluated in a live CCL image.
 * Requirements
 
 - Clozure CL (=ccl= in PATH)
+- Git (verifies the pinned Clinedi checkout)
 - Quicklisp (=~/quicklisp/setup.lisp= by default)
+- Clinedi at the revision recorded in =dependencies.lock=, registered as a
+  Quicklisp local project
 - starship (prompt rendering, with a plain fallback when missing)
 - Linux (terminal control talks to libc termios/ioctl directly)
 
-The shell code itself has zero dependencies beyond CCL and ASDF.
-Quicklisp is a build dependency: every saved cclsh image includes it,
+Clinedi supplies the Unicode-aware terminal line editor. For sibling checkouts
+below =~/common-lisp/=, add that parent to Quicklisp before registering local
+projects, for example in =~/quicklisp/local-init/common-lisp.lisp=:
+
+#+begin_src lisp
+(in-package #:quicklisp-client)
+(pushnew #P"/root/common-lisp/"
+         *local-project-directories*
+         :test #'equal)
+#+end_src
+
+Quicklisp is also a build dependency: every saved cclsh image includes it,
 so =(ql:quickload ...)= works out of the box. Set
 =CCLSH_QUICKLISP_SETUP= when its =setup.lisp= is installed somewhere
-other than =~/quicklisp/setup.lisp=. The build stops before saving an
-image if Quicklisp is unavailable or broken.
+other than =~/quicklisp/setup.lisp=. The build stops before saving an image if
+Quicklisp is unavailable, Clinedi resolves outside its registered local
+checkout, or the checkout is dirty or differs from =dependencies.lock=.
 
 * Building
 
@@ -110,7 +124,8 @@ scripts/integration-check
 
 * Line editor
 
-Arrow keys navigate history and the cursor. As you type, the newest
+The interactive editor is provided by Clinedi. Arrow keys navigate history and
+the cursor. As you type, the newest
 matching history entry appears after the cursor in dim text; Right or
 C-f at the end accepts it. Multi-line history entries retain their
 newlines. Tab completes command names, file paths and Lisp symbols.

@@ -20,12 +20,16 @@ the CCL kernel that saved the image. Each file is written under a
 temporary name and renamed only after both exist, so an interrupted
 build never installs a truncated artifact. Keeping the image separate
 avoids an intermittent CCL 1.13 prepended-image resume failure on
-current Linux. The build requires =~/quicklisp/setup.lisp= and bakes
-Quicklisp into every saved image. Set =CCLSH_QUICKLISP_SETUP= to use a
-setup file elsewhere; an unavailable or broken setup stops the build
-before it saves. Before installation, the build boots the staged image
-under an empty home directory and verifies that =QL:QUICKLOAD= is
-already present. You can also run the shell from any CCL REPL:
+current Linux. The build requires =~/quicklisp/setup.lisp= and the Clinedi
+checkout recorded in =dependencies.lock=. Clinedi must be registered as a
+Quicklisp local project; add the checkout's parent directory to
+=ql:*local-project-directories*= when it is not directly below
+=~/quicklisp/local-projects/=. Set =CCLSH_QUICKLISP_SETUP= to use a setup file
+elsewhere. An unavailable Quicklisp setup, a dirty or mismatched Clinedi
+checkout, or a wrong local-project resolution stops the build before it saves.
+Before installation, the build boots the staged image under an empty home
+directory and verifies that Quicklisp and Clinedi are already present. You can
+also run the shell from any CCL REPL:
 
 #+begin_src lisp
 (asdf:load-system "cclsh")
@@ -321,6 +325,10 @@ Details worth knowing:
 
 * Line editing and completion
 
+Clinedi provides the Unicode-aware editing state, key decoding and terminal
+repaint loop. cclsh supplies shell completion, highlighting, history and prompt
+policy through its callbacks.
+
 | Key                 | Action                              |
 |---------------------+-------------------------------------|
 | Tab                 | complete commands, files or symbols |
@@ -395,7 +403,7 @@ A reasonable starting point:
 
 * Quicklisp and scripting
 
-Every saved cclsh image includes Quicklisp, so
+Every saved cclsh image includes Quicklisp and the pinned Clinedi line editor, so
 =(ql:quickload :system)= works immediately and makes the shell a decent
 scripting host:
 
