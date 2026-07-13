@@ -7,13 +7,16 @@ Unix command or a Lisp form, evaluated in a live CCL image.
 * Requirements
 
 - Clozure CL (=ccl= in PATH)
+- Quicklisp (=~/quicklisp/setup.lisp= by default)
 - starship (prompt rendering, with a plain fallback when missing)
 - Linux (terminal control talks to libc termios/ioctl directly)
 
-The shell code itself has zero dependencies beyond CCL and ASDF. When
-=~/quicklisp/setup.lisp= exists at build time, Quicklisp is baked into
-the produced image so =(ql:quickload ...)= works out of the box; in an
-image built without it, =(quicklisp-setup)= loads or installs it.
+The shell code itself has zero dependencies beyond CCL and ASDF.
+Quicklisp is a build dependency: every saved cclsh image includes it,
+so =(ql:quickload ...)= works out of the box. Set
+=CCLSH_QUICKLISP_SETUP= when its =setup.lisp= is installed somewhere
+other than =~/quicklisp/setup.lisp=. The build stops before saving an
+image if Quicklisp is unavailable or broken.
 
 * Building
 

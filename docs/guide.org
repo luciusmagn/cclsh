@@ -17,8 +17,10 @@ scripts/install     # builds and installs a copy to ~/.local/bin/cclsh
 =scripts/build= alone produces =./cclsh= in the repository. Both are
 atomic: the binary is written under a temporary name and renamed, so
 an interrupted build never leaves a truncated executable behind. The
-build bakes Quicklisp into the image when =~/quicklisp/setup.lisp=
-exists. You can also run the shell from any CCL REPL:
+build requires =~/quicklisp/setup.lisp= and bakes Quicklisp into every
+saved image. Set =CCLSH_QUICKLISP_SETUP= to use a setup file elsewhere;
+an unavailable or broken setup stops the build before it saves. You can
+also run the shell from any CCL REPL:
 
 #+begin_src lisp
 (asdf:load-system "cclsh")
@@ -244,11 +246,11 @@ is sh's =$(cmd)=, and composes with Lisp substitution:
 And from the command line, capture inside a substitution:
 
 #+begin_src sh
-echo deployed (capture (git rev-parse "--short" HEAD))
+echo deployed (capture (git "rev-parse" "--short" "HEAD"))
 #+end_src
 
-(note =rev-parse= and =HEAD= are evaluated stage arguments, so bare
-symbols only work when bound; strings are the safe spelling). File
+(Stage arguments are evaluated, so literal words such as =rev-parse=
+and =HEAD= must be strings unless same-named variables are bound.) File
 redirection is byte-transparent, =capture= decodes UTF-8, and error
 redirection covers builtin stages' =*error-output*= too. =error-to=
 and =merge-error= are mutually exclusive.
@@ -373,16 +375,19 @@ A reasonable starting point:
 
 * Quicklisp and scripting
 
-When the image was built with Quicklisp, =(ql:quickload :system)= works
-immediately, which makes the shell a decent scripting host:
+Every saved cclsh image includes Quicklisp, so
+=(ql:quickload :system)= works immediately and makes the shell a decent
+scripting host:
 
 #+begin_src lisp
 (ql:quickload :dexador)
 (dex:get "https://example.com")
 #+end_src
 
-In an image built without it, =(quicklisp-setup)= loads an existing
-=~/quicklisp= or installs one with curl.
+=quicklisp-setup= remains useful when running cclsh directly from an
+unsaved CCL development image: it loads an existing =~/quicklisp= or
+installs one with curl. =scripts/build= itself never produces an image
+without Quicklisp.
 
 Scripts run three ways, all skipping =startup.lisp= and history:
 

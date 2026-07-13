@@ -79,7 +79,7 @@ print their values one per line.
   (* 2 *)                  6, * holds the last value (** and *** too)
   (defvar *project* \"~/src\")
   cd (*project*)           definitions feed straight back into commands
-  (ql:quickload :dexador)  Quicklisp is baked into the image
+  (ql:quickload :dexador)  every saved image includes Quicklisp
 
   (defparam x 1)           cclsh: undefined function defparam,
                            did you mean defparameter?
@@ -118,8 +118,9 @@ An integer return value becomes the exit status, anything else means
   (cmd git \"diff\" file)    macro, head resolves like a command word
 
 Builtins: cd (with -), exit, export, unset, rehash, commands, help,
-jobs, fg, bg. quicklisp-setup loads or installs Quicklisp. commands
-lists everything currently defined.")
+jobs, fg, bg. Saved cclsh images include Quicklisp; quicklisp-setup
+loads or installs it when running from an unsaved development image.
+commands lists everything currently defined.")
 
     ("pipelines" "pipe, seq, all and any"
      "Process orchestration is spelled in Lisp. A stage is (name
