@@ -247,10 +247,10 @@ respected), one printed string per entry:
   \"(pipe (git \\\"log\\\") (head))\"
 
 Loading keeps the newest 10000. Blank lines, aborted lines and
-immediate duplicates are skipped, and non-interactive sessions never
-write it. Multi-line entries recall with their original newlines. The
-newest entry beginning with current input is offered as a dim
-suggestion; Right or C-f accepts it.")
+immediate duplicates are skipped. Non-interactive sessions neither
+load nor write history. Multi-line entries recall with their original
+newlines. The newest entry beginning with current input is offered as
+a dim suggestion; Right or C-f accepts it.")
 
     ("environment" "environment variables, the lispy way"
      "From the command line:
@@ -272,7 +272,8 @@ Lowercase names like http_proxy need strings. ~ does not expand after
 =, use $HOME in values.")
 
     ("startup" "configuration and safe mode"
-     "~/.config/cclsh/startup.lisp loads on startup in cclsh-user:
+     "~/.config/cclsh/startup.lisp loads for interactive sessions and
+configured command strings in cclsh-user:
 
   (setenv 'editor \"vim\")
   (defcommand la ()
@@ -317,6 +318,14 @@ history:
   cclsh provision.cclsh           a script file
   cclsh < input                   piped standard input
 
+Load startup.lisp, but not history, for a configured one-shot:
+
+  cclsh -lc 'z project'
+  cclsh -ic 'echo $EDITOR'
+
+Short flags combine in any order: -lc, -cl and -ilc are equivalent,
+and -l -c works too. CCLSH_SAFE=1 suppresses startup.lisp even here.
+
 Script files work as shebang interpreters:
 
   #!/home/mag/.local/bin/cclsh
@@ -335,9 +344,12 @@ cclsh as a login shell; the string uses cclsh syntax, not sh.")
    (name \"mag\")
    (shell \"/home/mag/.local/bin/cclsh\"))
 
-Unknown flags are ignored so odd login invocations cannot lock you
-out. scripts/install puts a matched CCL kernel and cclsh.image beside
-each other with atomic renames, and the kernel sets SHELL to itself.
+Plain -c skips all user state for remote safety. -lc, -cl, -ic and
+-l -c load startup.lisp before running their command, so $SHELL -lc
+sees the configured login environment. Other flags are ignored so odd
+login invocations cannot lock you out. scripts/install puts a matched
+CCL kernel and cclsh.image beside each other with atomic renames, and
+the kernel sets SHELL to itself.
 Keep ccl installed in your Guix profile: the copied kernel can still
 link glibc from the store through CCL's closure, and guix gc could
 otherwise collect it out from under your login. Nothing sources

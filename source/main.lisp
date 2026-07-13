@@ -2,10 +2,10 @@
 ;;;
 ;;; Startup, the read loop with Lisp continuation lines, and the entry
 ;;; points for a REPL session and the saved application. The saved
-;;; application is written to survive login shell duty: -c is handled
-;;; for ssh, scp, rsync and git, unknown flags are ignored instead of
-;;; refusing to start, a broken startup file or history never prevents
-;;; a prompt, and CCLSH_SAFE=1 skips user state entirely.
+;;; application is written to survive login shell duty: plain -c is safe
+;;; for ssh, scp, rsync and git, -lc provides configured one-shots, unknown
+;;; flags are ignored instead of refusing to start, a broken startup file or
+;;; history never prevents a prompt, and CCLSH_SAFE=1 skips user state.
 
 (in-package #:cclsh)
 
@@ -140,19 +140,20 @@
   "Run the shell until exit or end of input. Iteration errors are
    reported and survived; only a long unbroken run of failures makes
    the shell give up, so a login session is never lost to one bad
-   prompt render or a flaky read."
+   prompt render or a flaky read. Piped input is a stateless scripting
+   mode and therefore skips startup.lisp and history."
   (terminal-encoding-setup)
   (terminal-signals-setup)
   (terminal-shell-attributes-save)
   (environment-setup)
-  (let ((safe (shell-safe-mode-p)))
-    (unless safe
+  (let ((safe        (shell-safe-mode-p))
+        (interactive (terminal-tty-p)))
+    (when (and interactive (not safe))
       (history-load))
-    (let ((*package*   (find-package '#:cclsh-user))
-          (interactive (terminal-tty-p))
-          (duration    0)
-          (failures    0))
-      (unless safe
+    (let ((*package* (find-package '#:cclsh-user))
+          (duration  0)
+          (failures  0))
+      (when (and interactive (not safe))
         (startup-load))
       (loop
         (catch 'cclsh-toplevel
@@ -197,16 +198,18 @@
 
 ;;; Command line arguments
 
-(defun shell--execute-command-string (command)
-  "Run COMMAND as one shell input and exit with its status. This is
-   the -c mode used by ssh, scp, rsync, git and $SHELL callers. It
-   skips startup.lisp and history so user state can never break remote
-   access."
+(defun shell--execute-command-string (command &key configured-p)
+  "Run COMMAND as one shell input and exit with its status.
+   Plain -c skips startup.lisp and history so user state cannot break
+   remote access. When CONFIGURED-P is true, load startup.lisp first;
+   CCLSH_SAFE still suppresses it. Command mode never loads history."
   (terminal-encoding-setup)
   (terminal-signals-setup)
   (terminal-shell-attributes-save)
   (environment-setup)
   (let ((*package* (find-package '#:cclsh-user)))
+    (when (and configured-p (not (shell-safe-mode-p)))
+      (startup-load))
     (dispatch-line command))
   (shell-quit *last-status*))
 
@@ -236,41 +239,79 @@
         (shell-quit 127))))
   (shell-quit *last-status*))
 
-(defun shell--process-arguments (arguments)
-  "Handle command line ARGUMENTS. Returns only when the shell should
-   start its normal read loop; -c, --version, --help and script files
-   exit the process themselves. Unknown flags are deliberately ignored
-   so an exotic login invocation can never lock anyone out."
+(defun shell--short-option-group (argument)
+  "Return the option characters in a single-dash ARGUMENT, or NIL.
+   Long options, a lone dash and non-option arguments are not groups."
+  (when (and (> (length argument) 1)
+             (char= (char argument 0) #\-)
+             (not (char= (char argument 1) #\-)))
+    (subseq argument 1)))
+
+(defun shell--argument-plan (arguments)
+  "Decode ARGUMENTS without performing an action.
+   Return ACTION, OPERAND and CONFIGURED-P. ACTION is :MAIN, :COMMAND,
+   :MISSING-COMMAND, :SCRIPT, :VERSION or :HELP. Lowercase c selects
+   command mode anywhere in a single-dash group. Lowercase l or i in
+   that group, or an earlier group, requests startup.lisp for command
+   mode. Other option letters and unknown long options are ignored."
   (loop with remaining = arguments
+        with configured-p = nil
         while remaining
-        do (let ((argument (pop remaining)))
-             (cond ((string= argument "-c")
-                    (if remaining
-                        (shell--execute-command-string (pop remaining))
-                        (progn
-                          (format *error-output*
-                                  "cclsh: -c requires an argument~%")
-                          (shell-quit 2))))
-                   ((string= argument "--version")
-                    (format t "cclsh ~a~@[ (~a)~]~@[ (clinedi ~a)~] (~a ~a)~%"
-                            *cclsh-version*
-                            *cclsh-build-commit*
-                            *cclsh-build-clinedi-commit*
-                            (lisp-implementation-type)
-                            (lisp-implementation-version))
-                    (shell-quit 0))
+        do (let* ((argument (pop remaining))
+                  (options  (shell--short-option-group argument)))
+             (cond ((string= argument "--version")
+                    (return (values ':version nil configured-p)))
                    ((string= argument "--help")
-                    (format t "usage: cclsh [-c command] [script] ~
-                               [--version] [--help]~%")
-                    (shell-quit 0))
+                    (return (values ':help nil configured-p)))
                    ((string= argument "--")
                     nil)
+                   (options
+                    (when (or (find #\l options) (find #\i options))
+                      (setf configured-p t))
+                    (when (find #\c options)
+                      (return
+                        (if remaining
+                            (values ':command (pop remaining) configured-p)
+                            (values ':missing-command nil configured-p)))))
                    ((and (plusp (length argument))
                          (char= (char argument 0) #\-))
                     nil)
                    (t
-                    (shell--run-script argument)))))
-  (values))
+                    (return (values ':script argument configured-p)))))
+        finally (return (values ':main nil configured-p))))
+
+(defun shell--process-arguments (arguments)
+  "Handle command line ARGUMENTS. Returns only when the shell should
+   start its normal read loop; command strings, --version, --help and
+   script files exit the process themselves. Short flags may be combined
+   in any order. Unknown flags are deliberately ignored so an exotic
+   login invocation cannot lock anyone out."
+  (multiple-value-bind (action operand configured-p)
+      (shell--argument-plan arguments)
+    (ecase action
+      (:main
+       (values))
+      (:command
+       (shell--execute-command-string operand :configured-p configured-p))
+      (:missing-command
+       (format *error-output* "cclsh: -c requires an argument~%")
+       (shell-quit 2))
+      (:script
+       (shell--run-script operand))
+      (:version
+       (format t "cclsh ~a~@[ (~a)~]~@[ (clinedi ~a)~] (~a ~a)~%"
+               *cclsh-version*
+               *cclsh-build-commit*
+               *cclsh-build-clinedi-commit*
+               (lisp-implementation-type)
+               (lisp-implementation-version))
+       (shell-quit 0))
+      (:help
+       (format t "usage: cclsh [-il] [-c command] [script] ~
+                  [--version] [--help]~%~
+                  short flags may be combined; -l/-i with -c load ~
+                  startup.lisp~%")
+       (shell-quit 0)))))
 
 (defun shell--executable-path ()
   "Resolved path of the running executable, or NIL."

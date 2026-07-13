@@ -426,13 +426,14 @@ keywords and quotes magenta, numbers, characters and constants cyan, bound
 History lives in =~/.config/cclsh/history= (=XDG_CONFIG_HOME= is
 respected), one printed string per entry, capped at 10000 entries on
 load. Blank lines, aborted lines and immediate duplicates are not
-recorded. Piped (non-interactive) sessions read history but never
-write it. Recalled entries retain embedded newlines exactly.
+recorded. Piped (non-interactive) sessions neither load nor write
+history. Recalled entries retain embedded newlines exactly.
 
 * Configuration
 
-=~/.config/cclsh/startup.lisp= loads on startup in =cclsh-user=. A
-broken startup file prints its error and the shell starts anyway.
+=~/.config/cclsh/startup.lisp= loads in =cclsh-user= for interactive
+sessions and configured one-shots. A broken startup file prints its error
+and the shell continues anyway.
 A reasonable starting point:
 
 #+begin_src lisp
@@ -481,6 +482,19 @@ cclsh provision.cclsh         # a script file
 printf 'ls\n(+ 1 2)\nexit\n' | cclsh   # piped standard input
 #+end_src
 
+Use a configured command string when the command needs aliases, PATH changes
+or other definitions from =startup.lisp=:
+
+#+begin_src sh
+cclsh -lc 'z project'          # login configuration, then one command
+cclsh -ic 'echo $EDITOR'       # interactive configuration, then one command
+#+end_src
+
+The short flags can be combined in either order, so =-lc=, =-cl= and
+=-ilc= all work. A preceding =-l= or =-i= also configures a later =-c=.
+Configured command strings still skip history. =CCLSH_SAFE=1= suppresses the
+startup file even in configured mode.
+
 Script files also work as shebang interpreters:
 
 #+begin_src sh
@@ -497,13 +511,15 @@ The process exit code is the shell's last status, or the argument of
 cclsh is written to survive login shell duty, but change your login
 shell with the same care as always. What is in place:
 
-- =-c command= works, which is what sshd, scp, rsync, git over ssh and
-  =$SHELL= callers invoke. The string is interpreted with cclsh
-  semantics: plain =command arg...= lines (which is what scp, rsync
-  and git send) work as expected, but sh constructs like =&&= or =>=
-  in a =-c= string will not.
-- Unknown flags (=-l=, =-i=, ...) are ignored instead of refusing to
-  start, so exotic login invocations cannot lock you out.
+- Plain =-c command= works without user state, which is what sshd, scp,
+  rsync and git over ssh need. =-lc=, =-cl=, =-ic= and separated =-l -c=
+  load =startup.lisp= before the command, which is useful for =$SHELL -lc=
+  callers that expect the login environment. All command strings use cclsh
+  semantics: plain =command arg...= lines work as expected, but sh constructs
+  like =&&= or =>= do not.
+- Short flags combine in any order. Other short letters and unknown long
+  flags are ignored instead of refusing to start, so exotic login
+  invocations cannot lock you out.
 - A broken =startup.lisp= or history file prints its error and the
   shell starts anyway, and =CCLSH_SAFE=1 cclsh= skips both entirely.
 - Read loop errors are survived; the shell only gives up after 25

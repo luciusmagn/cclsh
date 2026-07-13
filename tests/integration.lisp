@@ -359,6 +359,15 @@ exit 0
         (cons "LC_ALL" "C")
         (cons "TERM" "xterm-256color")))
 
+(defun integration-environment-replace (&rest replacements)
+  "Return the integration environment with REPLACEMENTS applied.
+   Each replacement is a NAME . VALUE pair."
+  (append replacements
+          (remove-if
+           (lambda (entry)
+             (assoc (car entry) replacements :test #'string=))
+           (integration-environment))))
+
 
 ;;;; -- Bounded direct execution --
 
@@ -390,8 +399,14 @@ exit 0
       (:signaled (+ 128 (or code 0)))
       (t 125))))
 
-(defun integration-run (command &key (timeout 10))
-  "Run saved cclsh -c COMMAND in a private session with a hard timeout."
+(defun integration-run-arguments (arguments
+                                  &key
+                                    (timeout 10)
+                                    input
+                                    (environment (integration-environment)))
+  "Run saved cclsh with ARGUMENTS in a private, bounded session.
+   INPUT is NIL or a pathname suitable for CCL:RUN-PROGRAM. ENVIRONMENT
+   defaults to the isolated integration environment."
   (let ((output-path (integration-output-path "out"))
         (error-path  (integration-output-path "err"))
         (session-path (integration-output-path "sid"))
@@ -403,18 +418,20 @@ exit 0
           (setf process
                 (ccl:run-program
                  "/usr/bin/setsid"
-                 (list "--wait"
-                       (concatenate 'string *integration-bin-directory*
-                                    "bounded-session")
-                       session-path
-                       (princ-to-string timeout)
-                       *integration-binary* "-c" command)
-                 :input nil
+                 (append
+                  (list "--wait"
+                        (concatenate 'string *integration-bin-directory*
+                                     "bounded-session")
+                        session-path
+                        (princ-to-string timeout)
+                        *integration-binary*)
+                  arguments)
+                 :input input
                  :output output-path
                  :if-output-exists ':supersede
                  :error error-path
                  :if-error-exists ':supersede
-                 :env (integration-environment)
+                 :env environment
                  :wait nil
                  :external-format ':utf-8))
           (setf completed
@@ -450,6 +467,10 @@ exit 0
       (ignore-errors (delete-file error-path))
       (ignore-errors (delete-file session-path)))))
 
+(defun integration-run (command &key (timeout 10))
+  "Run saved cclsh -c COMMAND in a private session with a hard timeout."
+  (integration-run-arguments (list "-c" command) :timeout timeout))
+
 (defun integration-require-success (result context)
   "Require RESULT to have status zero, reporting its captured tail."
   (integration-ensure
@@ -469,6 +490,125 @@ exit 0
         for result = (integration-run "exit 0" :timeout 2)
         do (integration-require-success
             result (format nil "saved-image startup ~d" attempt))))
+
+(defun integration-check-command-line-modes ()
+  "Require combined flags and stateless scripting modes to honor user state."
+  (let* ((xdg          (integration-path "argument-modes-config/"))
+         (config       (concatenate 'string xdg "cclsh/"))
+         (startup      (concatenate 'string config "startup.lisp"))
+         (history      (concatenate 'string config "history"))
+         (script       (integration-path "argument-mode-script.cclsh"))
+         (pipe-input   (integration-path "argument-mode-input.cclsh"))
+         (history-text "__ARGUMENT_MODE_HISTORY_SHOULD_NOT_LOAD__")
+         (command
+           (format nil
+                   "(progn
+                      (format t
+                              \"__ARG_STARTUP__~~a__ARG_HISTORY__~~s__~~%\"
+                              (if (boundp '*argument-startup-loaded*)
+                                  (symbol-value '*argument-startup-loaded*)
+                                  \"absent\")
+                              (find ~s cclsh::*history* :test #'string=))
+                      (values))"
+                   history-text))
+         (configured-environment
+           (integration-environment-replace
+            (cons "XDG_CONFIG_HOME" xdg)
+            (cons "CCLSH_SAFE" "")))
+         (safe-environment
+           (integration-environment-replace
+            (cons "XDG_CONFIG_HOME" xdg)
+            (cons "CCLSH_SAFE" "1"))))
+    (integration-write-file
+     startup
+     "(setf *argument-startup-loaded* \"loaded\")\n")
+    (integration-write-file history (format nil "~s~%" history-text))
+    (integration-write-file
+     script
+     "(format t \"__SCRIPT_ONLY__~%\")
+(format t \"__SCRIPT_STARTUP__~a__~%\"
+        (if (boundp '*argument-startup-loaded*)
+            (symbol-value '*argument-startup-loaded*)
+            \"absent\"))
+")
+    (integration-write-file pipe-input (format nil "~a~%exit 0~%" command))
+
+    (dolist (flags '(("-lc") ("-cl") ("-ilc") ("-ic")
+                     ("-l" "-c") ("-xlc")))
+      (let* ((arguments (append flags (list command)))
+             (result
+               (integration-run-arguments
+                arguments :environment configured-environment)))
+        (integration-require-success
+         result (format nil "configured flags ~s" flags))
+        (integration-ensure
+         (integration-contains-p
+          "__ARG_STARTUP__loaded__ARG_HISTORY__NIL__"
+          (direct-result-output result))
+         "configured flags ~s did not load only startup.lisp: ~a"
+         flags (integration-tail (direct-result-output result)))))
+
+    (let ((result
+            (integration-run-arguments
+             (list "-c" command) :environment configured-environment)))
+      (integration-require-success result "plain -c")
+      (integration-ensure
+       (integration-contains-p
+        "__ARG_STARTUP__absent__ARG_HISTORY__NIL__"
+        (direct-result-output result))
+       "plain -c loaded user state: ~a"
+       (integration-tail (direct-result-output result))))
+
+    (let ((result
+            (integration-run-arguments
+             (list "-lc" command) :environment safe-environment)))
+      (integration-require-success result "safe -lc")
+      (integration-ensure
+       (integration-contains-p
+        "__ARG_STARTUP__absent__ARG_HISTORY__NIL__"
+        (direct-result-output result))
+       "CCLSH_SAFE did not suppress configured command state: ~a"
+       (integration-tail (direct-result-output result))))
+
+    (let ((result
+            (integration-run-arguments
+             (list "-ilc") :environment configured-environment)))
+      (integration-ensure
+       (= 2 (direct-result-status result))
+       "missing combined -c operand returned ~d instead of 2"
+       (direct-result-status result))
+      (integration-ensure
+       (integration-contains-p "-c requires an argument"
+                               (direct-result-error-output result))
+       "missing combined -c operand lacked its diagnostic: ~a"
+       (integration-tail (direct-result-error-output result))))
+
+    (let ((result (integration-run-arguments (list "-xyz"))))
+      (integration-require-success result "unknown short flags"))
+
+    (let ((result
+            (integration-run-arguments
+             (list script "-lc" "exit 91")
+             :environment configured-environment)))
+      (integration-require-success result "script argument boundary")
+      (integration-ensure
+       (and (integration-contains-p "__SCRIPT_ONLY__"
+                                    (direct-result-output result))
+            (integration-contains-p "__SCRIPT_STARTUP__absent__"
+                                    (direct-result-output result)))
+       "script arguments were parsed or script user state was loaded: ~a"
+       (integration-tail (direct-result-output result))))
+
+    (let ((result
+            (integration-run-arguments
+             nil :input pipe-input :environment configured-environment)))
+      (integration-require-success result "piped input")
+      (integration-ensure
+       (integration-contains-p
+        "__ARG_STARTUP__absent__ARG_HISTORY__NIL__"
+        (direct-result-output result))
+       "piped input loaded user state: ~a"
+       (integration-tail (direct-result-output result))))))
 
 (defun integration-check-baked-quicklisp ()
   "Require the saved image to contain a working Quicklisp entry point."
@@ -1707,6 +1847,8 @@ exit 0
       (integration-install-programs)
       (integration-test "saved-image startup stress"
                         #'integration-check-image-startup)
+      (integration-test "command-line modes and user state"
+                        #'integration-check-command-line-modes)
       (integration-test "Quicklisp baked into saved image"
                         #'integration-check-baked-quicklisp)
       (integration-test "Clinedi baked into saved image"

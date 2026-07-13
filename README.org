@@ -85,8 +85,9 @@ scripts/integration-check
   open strings, and trailing backslashes.
 - Undefined functions are reported with suggestions before argument
   evaluation can obscure them.
-- =~/.config/cclsh/startup.lisp= is loaded on startup, history persists
-  in =~/.config/cclsh/history= (=XDG_CONFIG_HOME= is respected).
+- =~/.config/cclsh/startup.lisp= is loaded for interactive sessions and
+  configured one-shots, history persists in =~/.config/cclsh/history=
+  (=XDG_CONFIG_HOME= is respected).
 - External commands run as the terminal's foreground process group, so
   interactive programs work and Ctrl-C reaches the child, not the
   shell. Errors and Ctrl-C never drop you into the CCL debugger.
@@ -94,9 +95,11 @@ scripts/integration-check
   foreground command or pipeline, =jobs=, =fg= and =bg= manage them,
   and finished background jobs are announced before the next prompt.
   =exit= warns once about stopped jobs.
-- =cclsh -c command=, script files and shebang scripts run without
-  user state, which keeps ssh, scp, rsync and git working when cclsh
-  is a login shell. =CCLSH_SAFE=1= skips startup.lisp and history.
+- =cclsh -c command=, script files, shebang scripts and piped input run
+  without user state, which keeps ssh, scp, rsync and git working when
+  cclsh is a login shell. Add =l= or =i= to command mode, such as
+  =cclsh -lc command=, to load =startup.lisp= first. Short flags combine
+  in any order. =CCLSH_SAFE=1= always skips startup.lisp and history.
 - Environment variables are lispy: =(setenv 'editor "vim")=,
   =(getenv :home)=, =(setf (env 'port) 8000)=, plus =export= and
   =unset= builtins.

@@ -55,6 +55,50 @@
              (clinedi:text-cell-width "猫"))
 
 
+;;;; -- Command line arguments --
+
+(dolist (case
+          '(("plain command mode" ("-c" "echo plain")
+             (:command "echo plain" nil))
+            ("login command group" ("-lc" "echo login")
+             (:command "echo login" t))
+            ("reverse login command group" ("-cl" "echo reverse")
+             (:command "echo reverse" t))
+            ("interactive login command group" ("-ilc" "echo both")
+             (:command "echo both" t))
+            ("interactive command group" ("-ic" "echo configured")
+             (:command "echo configured" t))
+            ("separate login and command flags" ("-l" "-c" "echo split")
+             (:command "echo split" t))
+            ("unknown letters mixed with command flags"
+             ("-xlc" "echo tolerant")
+             (:command "echo tolerant" t))
+            ("unknown letters mixed with plain command mode"
+             ("-xc" "echo safe")
+             (:command "echo safe" nil))
+            ("command operand beginning with dash" ("-c" "-l")
+             (:command "-l" nil))
+            ("missing command" ("-c")
+             (:missing-command nil nil))
+            ("configured missing command" ("-l" "-c")
+             (:missing-command nil t))
+            ("unknown short flags" ("-xyz")
+             (:main nil nil))
+            ("configuration flags without command" ("-lix")
+             (:main nil t))
+            ("long option is not a short group" ("--lc" "script.cclsh")
+             (:script "script.cclsh" nil))
+            ("uppercase C remains unknown" ("-C" "script.cclsh")
+             (:script "script.cclsh" nil))
+            ("script stops option parsing"
+             ("script.cclsh" "-lc" "echo not-executed")
+             (:script "script.cclsh" nil))))
+  (destructuring-bind (name arguments expected) case
+    (check-equal name expected
+                 (multiple-value-list
+                  (cclsh::shell--argument-plan arguments)))))
+
+
 ;;;; -- Multiline Lisp --
 
 (let ((lisp-line (format nil "(progn~% ; ignored )~% 42)"))
