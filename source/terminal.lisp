@@ -34,6 +34,9 @@
 (defconstant +winsize-ioctl+ #x5413
   "The TIOCGWINSZ ioctl request.")
 
+(defconstant +sigpipe+ 13
+  "Signal number of SIGPIPE.")
+
 (defconstant +sigcont+ 18
   "Signal number of SIGCONT.")
 
@@ -178,19 +181,24 @@
   (values))
 
 (defmacro with-child-signal-defaults (&body body)
-  "Run BODY, which spawns a child process, with SIGTTIN and SIGTTOU
-   back at their default dispositions. Children inherit the shell's
-   dispositions across exec, and a child that inherited the shell's
-   ignores could never be stopped by terminal reads the way job
-   control expects. The ignores are restored afterwards so the shell
-   itself survives taking the terminal back from a finished job."
+  "Run BODY, which spawns a child process, with SIGTTIN, SIGTTOU and
+   SIGPIPE back at their default dispositions. Children inherit the
+   shell's dispositions across exec: with the inherited ignores a
+   child could never be stopped by terminal reads the way job control
+   expects, and a pipeline stage would write into a closed pipe
+   forever instead of dying of SIGPIPE (CCL ignores it process-wide
+   for its own stream code). The ignores are restored afterwards so
+   the shell itself survives taking the terminal back from a finished
+   job and treats its own broken pipes as stream errors."
   `(unwind-protect
        (progn
          (terminal--signal-disposition +sigttin+ 0)
          (terminal--signal-disposition +sigttou+ 0)
+         (terminal--signal-disposition +sigpipe+ 0)
          ,@body)
      (terminal--signal-disposition +sigttin+ 1)
-     (terminal--signal-disposition +sigttou+ 1)))
+     (terminal--signal-disposition +sigttou+ 1)
+     (terminal--signal-disposition +sigpipe+ 1)))
 
 (defun terminal-own-process-group ()
   "Return the shell's own process group id."
