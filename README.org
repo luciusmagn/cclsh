@@ -24,8 +24,10 @@ image if Quicklisp is unavailable or broken.
 scripts/build
 #+end_src
 
-This produces a standalone =cclsh= binary in the repository root via
-=ccl:save-application=. Alternatively, from a running CCL:
+This produces a matched =cclsh= kernel executable and =cclsh.image=
+heap image in the repository root. Keeping the image adjacent instead
+of appending it to the kernel avoids an intermittent CCL 1.13 image
+resume failure on current Linux. Alternatively, from a running CCL:
 
 #+begin_src lisp
 (asdf:load-system "cclsh")
