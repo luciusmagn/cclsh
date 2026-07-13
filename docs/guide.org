@@ -262,6 +262,20 @@ Each returns the deciding exit status and records it in
 =*last-status*=. Builtin commands can appear inside =pipe= as well;
 they run concurrently and stream output to the next stage.
 
+* Unicode and bytes
+
+cclsh uses UTF-8 for terminal input and output, startup and history
+files, scripts, Starship output, environment names and values, child
+arguments, executable paths, and captured pipeline text. This is an
+explicit shell invariant and does not depend on =LANG= or =LC_ALL=.
+The editor measures terminal cells rather than Lisp characters, so
+wide CJK and emoji glyphs wrap correctly, while combining marks and
+joined emoji move and delete as one grapheme.
+
+Redirect-only pipelines remain byte-transparent. Use =(from file)= and
+=(to file)= without a Lisp builtin or =capture= when copying arbitrary
+binary data.
+
 * Job control
 
 A trailing =&= launches an external command as a background job,

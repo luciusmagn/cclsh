@@ -93,6 +93,20 @@ style:
 
   (format t \"hello\")       hello⏎ then NIL on a fresh line")
 
+    ("unicode" "UTF-8 text and byte-transparent files"
+     "Terminal I/O, startup and history files, scripts, prompt output,
+environment names and values, child arguments and paths, and captured
+pipeline text are UTF-8 regardless of the process locale.
+
+The editor measures terminal cells. Wide CJK and emoji glyphs wrap in
+two cells; combining marks and joined emoji move and delete as one
+grapheme.
+
+Redirect-only pipelines are byte-transparent, so arbitrary binary
+files can be copied without UTF-8 decoding:
+
+  (pipe (from \"input.bin\") (to \"output.bin\"))")
+
     ("commands" "defining commands, run and cmd"
      "defcommand defines a shell command that is also an ordinary
 function:

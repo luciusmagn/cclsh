@@ -192,7 +192,7 @@ n=0
 if test -r \"$file\"; then read n < \"$file\"; fi
 n=$((n + 1))
 printf '%s\\n' \"$n\" > \"$file\"
-printf '__CCLSH_PROMPT_%s__ ' \"$n\"
+printf '你好 🐈 λ __CCLSH_PROMPT_%s__ ' \"$n\"
 ")
   (integration-write-program
    "pgid-left"
@@ -314,10 +314,11 @@ printf '%s\\n' \"$1\"
         (cons "HOME" *integration-directory*)
         (cons "XDG_CONFIG_HOME" *integration-directory*)
         (cons "CCLSH_SAFE" "1")
+        (cons "CCLSH_QUICKLISP_SETUP" "/definitely/missing/setup.lisp")
         (cons "CCLSH_TEST_ROOT"
               (string-right-trim "/" *integration-directory*))
-        (cons "LANG" "C.UTF-8")
-        (cons "LC_ALL" "C.UTF-8")
+        (cons "LANG" "C")
+        (cons "LC_ALL" "C")
         (cons "TERM" "xterm-256color")))
 
 
@@ -430,6 +431,24 @@ printf '%s\\n' \"$1\"
         for result = (integration-run "exit 0" :timeout 2)
         do (integration-require-success
             result (format nil "saved-image startup ~d" attempt))))
+
+(defun integration-check-baked-quicklisp ()
+  "Require the saved image to contain a working Quicklisp entry point."
+  (let* ((result
+           (integration-run
+            "(let* ((package (find-package \"QL\"))
+                    (quickload (and package
+                                    (find-symbol \"QUICKLOAD\" package)))
+                    (available (and quickload (fboundp quickload) t)))
+               (when available
+                 (funcall quickload :quicklisp :silent t))
+               (format t \"__BAKED_QUICKLISP__~s__~%\" available))"))
+         (output (direct-result-output result)))
+    (integration-require-success result "baked Quicklisp")
+    (integration-ensure
+     (integration-contains-p "__BAKED_QUICKLISP__T__" output)
+     "saved image has no working QL:QUICKLOAD: ~a"
+     (integration-tail output))))
 
 (defun integration-check-no-polling ()
   "Require process and job state changes to be event driven."
@@ -555,14 +574,23 @@ printf '%s\\n' \"$1\"
      "large stream returned a nonzero status")))
 
 (defun integration-check-utf8 ()
-  "Exercise UTF-8 across builtins, children, argv, files and capture."
+  "Exercise UTF-8 text boundaries independently of the process locale."
   (let* ((text "Příliš žluťoučký kůň 🐈")
+         (printf-format (format nil "%s~%"))
          (file (integration-path "výstup-žluťoučký.txt"))
+         (program-name "utf8-žluťoučký")
          (program (concatenate 'string *integration-bin-directory*
-                               "utf8-žluťoučký"))
+                               program-name))
+         (script
+           (integration-write-file
+            (integration-path "skript-žluť-你好.cclsh")
+            (format nil "(progn (write-line ~s) (values))~%exit 0~%"
+                    (concatenate 'string "__UTF8_SCRIPT__" text))))
          (form
            (format nil
                    "(progn
+                      (format t \"__UTF8_DEFAULT__~~s~~%\"
+                              ccl:*default-file-character-encoding*)
                       (defcommand emit-unicode ()
                         (write-line ~s)
                         0)
@@ -576,7 +604,7 @@ printf '%s\\n' \"$1\"
                                 \"__UTF8_BUILTIN__~~a__UTF8_A_STATUS__~~d~~%\"
                                 value status))
                       (multiple-value-bind (value status)
-                          (capture (printf \"%s\\n\" ~s)
+                          (capture (printf ~s ~s)
                                    (relay-unicode))
                         (format t
                                 \"__UTF8_EXTERNAL__~~a__UTF8_B_STATUS__~~d~~%\"
@@ -592,23 +620,52 @@ printf '%s\\n' \"$1\"
                           (capture (~s ~s))
                         (format t
                                 \"__UTF8_EXEC__~~a__UTF8_C_STATUS__~~d~~%\"
-                                value status)))"
-                   text text file file program text))
+                                value status))
+                      (multiple-value-bind (value status)
+                          (capture (~s ~s))
+                        (format t
+                                \"__UTF8_PATH_EXEC__~~a__UTF8_E_STATUS__~~d~~%\"
+                                value status))
+                      (multiple-value-bind (value status)
+                          (capture (~s ~s))
+                        (format t
+                                \"~~a__UTF8_F_STATUS__~~d~~%\"
+                                value status))
+                      (let ((ccl:*default-file-character-encoding*
+                              :iso-8859-1))
+                        (format t
+                                \"__UTF8_PROMPT__~~a__UTF8_PROMPT_END__~~%\"
+                                (cclsh::prompt-starship 0 0 80))))"
+                   text printf-format text file file program text
+                   program-name text *integration-binary* script))
          (result (integration-run form :timeout 15))
          (output (direct-result-output result)))
     (integration-require-success result "UTF-8 pipelines")
+    (integration-ensure
+     (integration-contains-p "__UTF8_DEFAULT__:UTF-8" output)
+     "saved image did not establish UTF-8 as its file default: ~a"
+     (integration-tail output))
     (dolist (marker '("__UTF8_BUILTIN__"
                       "__UTF8_EXTERNAL__"
                       "__UTF8_FILE_READ__"
-                      "__UTF8_EXEC__"))
+                      "__UTF8_EXEC__"
+                      "__UTF8_PATH_EXEC__"
+                      "__UTF8_SCRIPT__"))
       (integration-ensure
        (integration-contains-p (concatenate 'string marker text) output)
        "UTF-8 value after ~a was corrupted: ~a" marker
        (integration-tail output)))
+    (integration-ensure
+     (integration-contains-p
+      "__UTF8_PROMPT__你好 🐈 λ " output)
+     "UTF-8 prompt output was corrupted: ~a"
+     (integration-tail output))
     (dolist (marker '("__UTF8_A_STATUS__"
                       "__UTF8_B_STATUS__"
                       "__UTF8_C_STATUS__"
                       "__UTF8_D_STATUS__"
+                      "__UTF8_E_STATUS__"
+                      "__UTF8_F_STATUS__"
                       "__UTF8_FILE_STATUS__"))
       (integration-ensure
        (zerop (or (integration-integer-after marker output) -1))
@@ -617,14 +674,57 @@ printf '%s\\n' \"$1\"
      (string= (format nil "~a~%" text) (integration-read-file file))
      "UTF-8 redirected file did not round-trip")))
 
+(defun integration-check-utf8-config ()
+  "Require saved-image history and startup files to decode as UTF-8."
+  (let* ((text "Příliš žluťoučký kůň 🐈 你好")
+         (xdg (integration-path "konfigurace-žluť-你好/"))
+         (config (concatenate 'string
+                              (string-right-trim "/" xdg)
+                              "/cclsh/"))
+         (history (concatenate 'string config "history"))
+         (startup (concatenate 'string config "startup.lisp")))
+    (integration-write-file history (format nil "~s~%" text))
+    (integration-write-file
+     startup
+     (format nil "(setf cclsh-user::*integration-utf8-startup* ~s)~%"
+             text))
+    (let* ((result
+             (integration-run
+              (format nil
+               "(progn
+                 (setenv \"XDG_CONFIG_HOME\" ~s)
+                 (setf (fill-pointer cclsh::*history*) 0)
+                 (when (boundp '*integration-utf8-startup*)
+                   (makunbound '*integration-utf8-startup*))
+                 (let ((ccl:*default-file-character-encoding*
+                         :iso-8859-1))
+                   (cclsh::history-load)
+                   (cclsh::startup-load))
+                 (format t \"__UTF8_HISTORY__~~a__UTF8_HISTORY_END__~~%\"
+                         (and (plusp (fill-pointer cclsh::*history*))
+                              (aref cclsh::*history* 0)))
+                 (format t \"__UTF8_STARTUP__~~a__UTF8_STARTUP_END__~~%\"
+                         (and (boundp '*integration-utf8-startup*)
+                              *integration-utf8-startup*)))"
+               xdg)))
+           (output (direct-result-output result)))
+      (integration-require-success result "UTF-8 configuration files")
+      (dolist (marker '("__UTF8_HISTORY__" "__UTF8_STARTUP__"))
+        (integration-ensure
+         (integration-contains-p (concatenate 'string marker text) output)
+         "saved-image configuration value after ~a was corrupted: ~a"
+         marker (integration-tail output))))))
+
 (defun integration-check-unicode-environment ()
   "Require Unicode environment mutation, lookup and child inheritance."
   (let* ((name "CCLSH_UTF8_INHERITANCE")
+         (unicode-name "CCLSH_UTF8_ŽLUŤ_你好")
          (text "Příliš žluťoučký kůň 🐈 你好")
          (shell-code (format nil "printf '%s' \"$~a\"" name))
          (form
            (format nil
                    "(progn
+                      (setenv ~s ~s)
                       (setenv ~s ~s)
                       (format t \"__ENV_GET__~~a__ENV_GET_END__~~%\"
                               (getenv ~s))
@@ -633,9 +733,18 @@ printf '%s\\n' \"$1\"
                         (format t
                                 \"__ENV_CHILD__~~a__ENV_CHILD_END__~~d~~%\"
                                 value status))
+                      (multiple-value-bind (value status)
+                          (capture (~s))
+                        (format t
+                                \"__ENV_UNICODE_NAME__~~a__ENV_UNICODE_NAME_END__~~d~~%\"
+                                value status))
                       (unset ~s)
-                      (format t \"__ENV_UNSET__~~s~~%\" (getenv ~s)))"
-                   name text name "/usr/bin/env" shell-code name name))
+                      (unset ~s)
+                      (format t \"__ENV_UNSET__~~s:~~s~~%\"
+                              (getenv ~s) (getenv ~s)))"
+                   name text unicode-name text name
+                   "/usr/bin/env" shell-code "/usr/bin/env"
+                   name unicode-name name unicode-name))
          (result (integration-run form))
          (output (direct-result-output result)))
     (integration-require-success result "Unicode environment inheritance")
@@ -650,8 +759,18 @@ printf '%s\\n' \"$1\"
      "child environment did not inherit the exact Unicode value: ~a"
      (integration-tail output))
     (integration-ensure
-     (integration-contains-p "__ENV_UNSET__NIL" output)
-     "UNSET did not remove the Unicode-valued environment entry: ~a"
+     (integration-contains-p
+      (format nil "~a=~a~%" unicode-name text)
+      output)
+     "child environment lost a Unicode name or value: ~a"
+     (integration-tail output))
+    (integration-ensure
+     (integration-contains-p "__ENV_UNICODE_NAME_END__0" output)
+     "child environment listing failed: ~a"
+     (integration-tail output))
+    (integration-ensure
+     (integration-contains-p "__ENV_UNSET__NIL:NIL" output)
+     "UNSET did not remove the Unicode environment entries: ~a"
      (integration-tail output))))
 
 (defun integration-check-binary-copy ()
@@ -1067,6 +1186,60 @@ printf '%s\\n' \"$1\"
                         (integration-tail output))
     count))
 
+(defun integration-check-unicode-line-editing ()
+  "Require PTY cursor movement and deletion to preserve graphemes."
+  (let ((session (integration-session-start)))
+    (unwind-protect
+        (progn
+          (integration-session-command
+           session
+           "(defcommand unicode-args (&rest arguments)
+              (format t \"__UNICODE_EDIT__~s__~%\" arguments)
+              0)")
+          (flet ((finish-edited-line (line edit)
+                   (let ((start (integration-session-position session)))
+                     (integration-session-send session line)
+                     (funcall edit)
+                     (integration-session-send session (string #\newline))
+                     (let ((end (integration-session-await-prompt
+                                 session start :timeout 8)))
+                       (subseq (integration-session-text session)
+                               start end)))))
+            (let* ((combined (format nil "e~c" (code-char #x301)))
+                   (output
+                     (finish-edited-line
+                      (concatenate 'string "unicode-args A" combined "B")
+                      (lambda ()
+                        (integration-session-send
+                         session (string (code-char 1)))
+                        (loop repeat (length "unicode-args A")
+                              do (integration-session-send
+                                  session
+                                  (format nil "~c[C" (code-char 27))))
+                        (integration-session-send
+                         session (string (code-char 4)))))))
+              (integration-ensure
+               (integration-contains-p
+                "__UNICODE_EDIT__(\"AB\")__"
+                (integration-clean-text output))
+               "Delete split a combining grapheme: ~a"
+               (integration-tail output)))
+            (let ((output
+                    (finish-edited-line
+                     "unicode-args A👨‍👩‍👧‍👦B"
+                     (lambda ()
+                       (integration-session-send
+                        session (format nil "~c[D" (code-char 27)))
+                       (integration-session-send
+                        session (string (code-char 127)))))))
+              (integration-ensure
+               (integration-contains-p
+                "__UNICODE_EDIT__(\"AB\")__"
+                (integration-clean-text output))
+               "Backspace split a joined emoji grapheme: ~a"
+               (integration-tail output)))))
+      (integration-session-stop session))))
+
 
 ;;;; -- Interactive job and terminal checks --
 
@@ -1329,6 +1502,8 @@ printf '%s\\n' \"$1\"
       (integration-install-programs)
       (integration-test "saved-image startup stress"
                         #'integration-check-image-startup)
+      (integration-test "Quicklisp baked into saved image"
+                        #'integration-check-baked-quicklisp)
       (integration-test "event-driven child state"
                         #'integration-check-no-polling)
       (integration-test "one process group per pipeline"
@@ -1343,6 +1518,8 @@ printf '%s\\n' \"$1\"
                         #'integration-check-large-stream)
       (integration-test "UTF-8 boundaries"
                         #'integration-check-utf8)
+      (integration-test "UTF-8 history and startup files"
+                        #'integration-check-utf8-config)
       (integration-test "Unicode environment inheritance"
                         #'integration-check-unicode-environment)
       (integration-test "redirect-only binary copy"
@@ -1357,6 +1534,8 @@ printf '%s\\n' \"$1\"
                         #'integration-check-failure-cleanup)
       (integration-test "PTY jobs, signals and terminal modes"
                         #'integration-check-interactive)
+      (integration-test "PTY Unicode grapheme editing"
+                        #'integration-check-unicode-line-editing)
       (integration-test "PTY in-process builtin job control"
                         #'integration-check-builtin-job-control)
       (integration-test "PTY builtin terminal-input proxy"

@@ -98,29 +98,49 @@
   "Screen position after TEXT through END, following a prompt of
    PROMPT-WIDTH cells in a terminal with COLUMNS columns. Returns row,
    column and whether an exact-width wrap still needs materializing."
-  (let ((row          (floor prompt-width columns))
-        (column       (mod prompt-width columns))
-        (pending-wrap (and (plusp prompt-width)
-                           (zerop (mod prompt-width columns)))))
-    (loop for index below end
-          for char = (char text index)
-          do (cond ((char= char #\newline)
-                    (if pending-wrap
-                        (setf pending-wrap nil)
-                        (incf row))
-                    (setf column 0))
-                   ((char= char #\return)
-                    (setf column 0)
-                    (setf pending-wrap nil))
-                   (t
-                    (when pending-wrap
-                      (setf pending-wrap nil))
-                    (incf column)
-                    (when (= column columns)
-                      (incf row)
-                      (setf column 0)
-                      (setf pending-wrap t))))
-          finally (return (values row column pending-wrap)))))
+  (terminal--call-with-cell-locale
+   (lambda ()
+     (let ((row          (floor prompt-width columns))
+           (column       (mod prompt-width columns))
+           (pending-wrap (and (plusp prompt-width)
+                              (zerop (mod prompt-width columns))))
+           (index        0))
+       (loop while (< index end)
+             do (let ((char (char text index)))
+                  (cond ((char= char #\newline)
+                         (if pending-wrap
+                             (setf pending-wrap nil)
+                             (incf row))
+                         (setf column 0)
+                         (incf index))
+                        ((char= char #\return)
+                         (setf column 0)
+                         (setf pending-wrap nil)
+                         (incf index))
+                        (t
+                         (let* ((next
+                                  (terminal-grapheme-next-boundary
+                                   text index end))
+                                (width
+                                  (terminal-grapheme-cell-width
+                                   text index next)))
+                           (when (plusp width)
+                             (setf width (min width columns))
+                             (when pending-wrap
+                               (setf pending-wrap nil))
+                             ;; A wide glyph beginning in the last column
+                             ;; wraps intact before it is drawn.
+                             (when (and (plusp column)
+                                        (> (+ column width) columns))
+                               (incf row)
+                               (setf column 0))
+                             (incf column width)
+                             (when (= column columns)
+                               (incf row)
+                               (setf column 0)
+                               (setf pending-wrap t)))
+                           (setf index next)))))
+             finally (return (values row column pending-wrap)))))))
 
 (defun editor--write-display (text)
   "Write display TEXT, following every newline with an explicit
@@ -195,14 +215,24 @@
 
 (defun editor--word-start (buffer cursor)
   "Index where the word before CURSOR starts."
-  (let ((index cursor))
-    (loop while (and (plusp index)
-                     (whitespace-char-p (char buffer (1- index))))
-          do (decf index))
-    (loop while (and (plusp index)
-                     (not (whitespace-char-p (char buffer (1- index)))))
-          do (decf index))
-    index))
+  (terminal--call-with-cell-locale
+   (lambda ()
+     (let ((starts nil)
+           (start  0)
+           (index  cursor))
+       (loop while (< start cursor)
+             do (push start starts)
+                (setf start
+                      (terminal-grapheme-next-boundary
+                       buffer start cursor)))
+       (loop while (and starts
+                        (whitespace-char-p (char buffer (first starts))))
+             do (setf index (pop starts)))
+       (loop while (and starts
+                        (not (whitespace-char-p
+                              (char buffer (first starts)))))
+             do (setf index (pop starts)))
+       index))))
 
 (defun editor--history-entry (history index)
   "History entry at INDEX, preserving its text exactly."
@@ -212,30 +242,69 @@
   "Move right within BUFFER, or accept the full SUGGESTION when CURSOR
    is already at the end. Returns (values buffer cursor)."
   (cond ((< cursor (length buffer))
-         (values buffer (1+ cursor)))
+         (values buffer (terminal-grapheme-next-boundary buffer cursor)))
         (suggestion
          (values suggestion (length suggestion)))
         (t
          (values buffer cursor))))
+
+(defun editor--insert-character (buffer cursor character)
+  "Insert CHARACTER at CURSOR and return the new buffer and safe cursor.
+   A joiner or combining mark may merge adjacent codepoints into one
+   grapheme, in which case the cursor moves past the complete glyph."
+  (let ((inserted
+          (concatenate 'string
+                       (subseq buffer 0 cursor)
+                       (string character)
+                       (subseq buffer cursor))))
+    (values inserted
+            (terminal-grapheme-boundary-at-or-after
+             inserted (1+ cursor)))))
+
+(defun editor--delete-before (buffer cursor)
+  "Delete the complete grapheme before CURSOR and return buffer and cursor."
+  (if (zerop cursor)
+      (values buffer cursor)
+      (let ((start (terminal-grapheme-previous-boundary buffer cursor)))
+        (values (concatenate 'string
+                             (subseq buffer 0 start)
+                             (subseq buffer cursor))
+                start))))
+
+(defun editor--delete-at (buffer cursor)
+  "Delete the complete grapheme at CURSOR and return buffer and cursor."
+  (if (>= cursor (length buffer))
+      (values buffer cursor)
+      (let ((end (terminal-grapheme-next-boundary buffer cursor)))
+        (values (concatenate 'string
+                             (subseq buffer 0 cursor)
+                             (subseq buffer end))
+                cursor))))
 
 
 ;;; Completion presentation
 
 (defun editor--print-candidates (displays columns)
   "Print completion DISPLAYS in columns under the edit line."
-  (let ((count (length displays)))
-    (if (> count 120)
-        (format t "(~d possibilities)~%" count)
-        (let* ((width   (+ 2 (loop for display in displays
-                                   maximize (length display))))
-               (per-row (max 1 (floor columns width))))
-          (loop for index from 1
-                for display in displays
-                do (format t "~va" width display)
-                when (zerop (mod index per-row))
-                  do (write-char #\Linefeed)
-                finally (unless (zerop (mod count per-row))
-                          (write-char #\Linefeed))))))
+  (terminal--call-with-cell-locale
+   (lambda ()
+     (let ((count (length displays)))
+       (if (> count 120)
+           (format t "(~d possibilities)~%" count)
+           (let* ((width
+                    (+ 2 (loop for display in displays
+                               maximize (terminal-text-cell-width display))))
+                  (per-row (max 1 (floor columns width))))
+             (loop for index from 1
+                   for display in displays
+                   for display-width = (terminal-text-cell-width display)
+                   do (write-string display)
+                      (loop repeat (- width display-width)
+                            do (write-char #\space))
+                   when (zerop (mod index per-row))
+                     do (write-char #\Linefeed)
+                   finally (unless (zerop (mod count per-row))
+                             (write-char #\Linefeed))))))))
   (force-output))
 
 (defun editor--complete (buffer cursor edit-prompt prompt-width columns
@@ -326,11 +395,8 @@
                     (editor-read-key)
                   (case key
                     (:char
-                     (setf buffer (concatenate 'string
-                                               (subseq buffer 0 cursor)
-                                               (string char)
-                                               (subseq buffer cursor)))
-                     (incf cursor))
+                     (multiple-value-setq (buffer cursor)
+                       (editor--insert-character buffer cursor char)))
                     (:enter
                      (editor--finish prompt-width buffer columns previous-row)
                      (return (values buffer ':line)))
@@ -347,23 +413,19 @@
                                             previous-row)
                             (return (values nil ':eof)))
                            ((< cursor (length buffer))
-                            (setf buffer (concatenate 'string
-                                                      (subseq buffer 0 cursor)
-                                                      (subseq buffer (1+ cursor)))))))
+                            (multiple-value-setq (buffer cursor)
+                              (editor--delete-at buffer cursor)))))
                     (:backspace
-                     (when (plusp cursor)
-                       (setf buffer (concatenate 'string
-                                                 (subseq buffer 0 (1- cursor))
-                                                 (subseq buffer cursor)))
-                       (decf cursor)))
+                     (multiple-value-setq (buffer cursor)
+                       (editor--delete-before buffer cursor)))
                     (:delete
-                     (when (< cursor (length buffer))
-                       (setf buffer (concatenate 'string
-                                                 (subseq buffer 0 cursor)
-                                                 (subseq buffer (1+ cursor))))))
+                     (multiple-value-setq (buffer cursor)
+                       (editor--delete-at buffer cursor)))
                     (:left
                      (when (plusp cursor)
-                       (decf cursor)))
+                       (setf cursor
+                             (terminal-grapheme-previous-boundary
+                              buffer cursor))))
                     (:right
                      (multiple-value-setq (buffer cursor)
                        (editor--move-right buffer cursor suggestion)))

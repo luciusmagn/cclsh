@@ -21,6 +21,29 @@
               :fill-pointer     (length entries)
               :initial-contents entries))
 
+(defun check-write-utf8-file (path contents)
+  "Write CONTENTS to PATH as UTF-8 and return PATH."
+  (ensure-directories-exist path)
+  (with-open-file (stream path
+                          :direction ':output
+                          :if-exists ':supersede
+                          :if-does-not-exist ':create
+                          :external-format ':utf-8)
+    (write-string contents stream))
+  path)
+
+(defun check-set-locale (locale)
+  "Set Linux LC_ALL to LOCALE, or query it when LOCALE is NIL."
+  (let ((pointer
+          (if locale
+              (ccl::with-utf-8-cstr (encoded locale)
+                (ccl:external-call "setlocale"
+                                   :int 6 :address encoded :address))
+              (ccl:external-call "setlocale"
+                                 :int 6 :address (ccl:%null-ptr) :address))))
+    (unless (ccl:%null-ptr-p pointer)
+      (ccl::%get-utf-8-cstring pointer))))
+
 
 ;;;; -- Multiline Lisp --
 
@@ -126,6 +149,45 @@
                 (with-output-to-string (stream)
                   (prin1 multiline stream)))))
 
+(let* ((root (format nil "/tmp/cclsh-check-žluť-你好-~d/"
+                     (ccl:external-call "getpid" :int)))
+       (old-xdg (cclsh:getenv "XDG_CONFIG_HOME"))
+       (text "Příliš žluťoučký kůň 🐈")
+       (startup-symbol
+         (intern "*CHECK-UTF8-STARTUP*" (find-package '#:cclsh-user))))
+  (unwind-protect
+      (let ((cclsh::*history*
+              (make-array 0 :adjustable t :fill-pointer t))
+            (ccl:*default-file-character-encoding* ':iso-8859-1))
+        (cclsh:setenv "XDG_CONFIG_HOME" root)
+        (cclsh::history-append text)
+        (setf (fill-pointer cclsh::*history*) 0)
+        (cclsh::history-load)
+        (check-equal "UTF-8 history ignores the ambient file encoding"
+                     text
+                     (and (= (fill-pointer cclsh::*history*) 1)
+                          (aref cclsh::*history* 0)))
+        (makunbound startup-symbol)
+        (check-write-utf8-file
+         (cclsh::startup-file)
+         (format nil
+                 "(setf (symbol-value (find-symbol ~s ~s)) ~s)~%"
+                 (symbol-name startup-symbol) "CCLSH-USER" text))
+        (cclsh::startup-load)
+        (check-equal "UTF-8 startup ignores the ambient file encoding"
+                     text
+                     (and (boundp startup-symbol)
+                          (symbol-value startup-symbol))))
+    (when (boundp startup-symbol)
+      (makunbound startup-symbol))
+    (if old-xdg
+        (cclsh:setenv "XDG_CONFIG_HOME" old-xdg)
+        (cclsh::unsetenv "XDG_CONFIG_HOME"))
+    (ignore-errors
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist ':ignore))))
+
 
 ;;;; -- UTF-8 environment --
 
@@ -152,6 +214,38 @@
         (cclsh:setenv name old)
         (cclsh::unsetenv name))))
 
+(let* ((old-locale (check-set-locale nil))
+       (czech-locale (or (check-set-locale "cs_CZ.UTF-8")
+                         (check-set-locale "cs_CZ.utf8")))
+       (expected "Adresář nebo soubor neexistuje"))
+  (unwind-protect
+      (when czech-locale
+        (check-equal "UTF-8 libc error text"
+                     expected
+                     (cclsh::process--error-string 2))
+        (check-equal "UTF-8 environment error report"
+                     t
+                     (not (null
+                           (search expected
+                                   (princ-to-string
+                                    (make-condition
+                                     'cclsh::environment-error
+                                     :operation "set"
+                                     :name "BROKEN"
+                                     :code 2))))))
+        (check-equal "UTF-8 terminal error report"
+                     t
+                     (not (null
+                           (search expected
+                                   (princ-to-string
+                                    (make-condition
+                                     'cclsh::terminal-control-error
+                                     :operation "foreground"
+                                     :process-group 1
+                                     :code 2)))))))
+    (when old-locale
+      (check-set-locale old-locale))))
+
 
 ;;;; -- Cursor movement and layout --
 
@@ -167,6 +261,56 @@
              '("abc" 3)
              (multiple-value-list
               (cclsh::editor--move-right "abc" 3 nil)))
+
+(let* ((combined (format nil "e~c" (code-char #x301)))
+       (family "👨‍👩‍👧‍👦")
+       (flag "🇨🇿"))
+  (check-equal "CJK character occupies two terminal cells"
+               2 (cclsh::terminal-text-cell-width "猫"))
+  (check-equal "emoji occupies two terminal cells"
+               2 (cclsh::terminal-text-cell-width "🐈"))
+  (check-equal "combining sequence occupies one terminal cell"
+               1 (cclsh::terminal-text-cell-width combined))
+  (check-equal "joined emoji occupies one wide glyph"
+               2 (cclsh::terminal-text-cell-width family))
+  (check-equal "regional-indicator pair occupies one wide glyph"
+               2 (cclsh::terminal-text-cell-width flag))
+  (check-equal "ANSI styling does not change Unicode cell width"
+               2 (cclsh::ansi-display-width
+                  (cclsh::ansi-colorize "猫" ':green)))
+  (check-equal "right skips a complete combining sequence"
+               (list combined (length combined))
+               (multiple-value-list
+                (cclsh::editor--move-right combined 0 nil)))
+  (check-equal "backspace removes a complete combining sequence"
+               '("x" 0)
+               (multiple-value-list
+                (cclsh::editor--delete-before
+                 (concatenate 'string combined "x")
+                 (length combined))))
+  (check-equal "delete removes a complete joined emoji"
+               '("x" 0)
+               (multiple-value-list
+                (cclsh::editor--delete-at
+                 (concatenate 'string family "x") 0)))
+  (check-equal "wide glyph ends at the terminal edge"
+               '(1 0 t)
+               (multiple-value-list
+                (cclsh::editor--screen-position "aa猫" 0 4)))
+  (check-equal "wide glyph wraps intact at the terminal edge"
+               '(1 2 nil)
+               (multiple-value-list
+                (cclsh::editor--screen-position "aaa猫" 0 4)))
+  (check-equal "combining sequence advances one screen cell"
+               '(0 1 nil)
+               (multiple-value-list
+                (cclsh::editor--screen-position combined 0 4)))
+  (check-equal "completion columns use display-cell widths"
+               (format nil "猫  a   ~%")
+               (with-output-to-string (stream)
+                 (let ((*standard-output* stream))
+                   (cclsh::editor--print-candidates
+                    '("猫" "a") 8)))))
 
 (let ((cases `((""                    (0 2 nil))
                ("a"                   (0 3 nil))
