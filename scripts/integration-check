@@ -1,0 +1,31 @@
+#!/bin/sh
+# Run process, pipeline and interactive job-control regressions.
+set -eu
+cd "$(dirname "$0")/.."
+
+if [ ! -x ./cclsh ]; then
+    echo "cclsh integration: build ./cclsh first with scripts/build" >&2
+    exit 2
+fi
+
+for program in ccl script setsid timeout pkill ps tr grep stty seq yes head wc cat sleep
+do
+    if ! command -v "$program" >/dev/null 2>&1; then
+        echo "cclsh integration: required program not found: $program" >&2
+        exit 2
+    fi
+done
+
+if find source cclsh.asd -type f -newer ./cclsh -print -quit | grep -q .
+then
+    echo "cclsh integration: ./cclsh is stale; run scripts/build first" >&2
+    exit 2
+fi
+
+exec ccl -n -b -e \
+    '(handler-case
+         (load "tests/integration.lisp")
+       (serious-condition (condition)
+         (format *error-output*
+                 "cclsh integration loader failed: ~a~%" condition)
+         (ccl:quit 1)))'

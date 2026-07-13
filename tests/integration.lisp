@@ -1,0 +1,1331 @@
+;;;; -- Process and terminal integration checks --
+;;;
+;;; This suite exercises the saved executable. Run SCRIPTS/BUILD before
+;;; SCRIPTS/INTEGRATION-CHECK so the image contains the source under test.
+
+(require :asdf)
+
+(defvar *integration-failures* nil
+  "Descriptions of failed integration checks.")
+
+(defvar *integration-file-counter* 0
+  "Counter used to give subprocess output files unique names.")
+
+(defparameter *integration-directory*
+  (format nil "/tmp/cclsh-integration-~d-~d/"
+          (ccl:external-call "getpid" :int)
+          (get-universal-time))
+  "Private temporary directory for this integration run.")
+
+(defparameter *integration-bin-directory*
+  (concatenate 'string *integration-directory* "bin/"))
+
+(defparameter *integration-binary*
+  (namestring (truename "cclsh")))
+
+
+;;;; -- Small assertions --
+
+(defun integration-fail (control &rest arguments)
+  "Signal an integration failure formatted by CONTROL and ARGUMENTS."
+  (error "~?" control arguments))
+
+(defun integration-ensure (value control &rest arguments)
+  "Require VALUE to be true, otherwise fail with CONTROL and ARGUMENTS."
+  (unless value
+    (apply #'integration-fail control arguments))
+  value)
+
+(defun integration-test (name function)
+  "Run FUNCTION as test NAME, record its failure and continue."
+  (handler-case
+      (progn
+        (funcall function)
+        (format t "[ OK ] ~a~%" name))
+    (serious-condition (condition)
+      (push (format nil "~a: ~a" name condition) *integration-failures*)
+      (format *error-output* "[FAIL] ~a: ~a~%" name condition)))
+  (finish-output)
+  (finish-output *error-output*))
+
+(defun integration-contains-p (needle haystack)
+  "True when HAYSTACK contains NEEDLE."
+  (not (null (search needle haystack))))
+
+(defun integration-skip-ansi (text start)
+  "Return the first index after the ANSI sequence at START in TEXT."
+  (let ((length (length text)))
+    (if (>= (1+ start) length)
+        length
+        (case (char text (1+ start))
+          (#\[
+           (or (position-if
+                (lambda (char)
+                  (let ((code (char-code char)))
+                    (<= #x40 code #x7e)))
+                text :start (+ start 2))
+               (1- length)))
+          (#\]
+           (let ((index (+ start 2)))
+             (loop while (< index length)
+                   for char = (char text index)
+                   do (cond ((char= char (code-char 7))
+                             (return index))
+                            ((and (char= char (code-char 27))
+                                  (< (1+ index) length)
+                                  (char= (char text (1+ index)) #\\))
+                             (return (1+ index))))
+                      (incf index)
+                   finally (return (1- length)))))
+          (t
+           (1+ start))))))
+
+(defun integration-clean-text (text)
+  "Remove terminal presentation sequences and carriage returns from TEXT."
+  (with-output-to-string (stream)
+    (loop with index = 0
+          while (< index (length text))
+          for char = (char text index)
+          do (cond ((char= char (code-char 27))
+                    (setf index (integration-skip-ansi text index)))
+                   ((not (char= char #\return))
+                    (write-char char stream)))
+             (incf index))))
+
+(defun integration-tail (text &optional (limit 1200))
+  "Return at most the last LIMIT characters of cleaned TEXT."
+  (let* ((clean (integration-clean-text text))
+         (start (max 0 (- (length clean) limit))))
+    (subseq clean start)))
+
+(defun integration-integer-after (marker text)
+  "Return the last decimal integer printed directly after MARKER in TEXT."
+  (let ((clean (integration-clean-text text))
+        (start 0)
+        (found nil))
+    (loop for marker-start = (search marker clean :start2 start)
+          while marker-start
+          for number-start = (+ marker-start (length marker))
+          do (when (and (< number-start (length clean))
+                        (digit-char-p (char clean number-start)))
+               (multiple-value-bind (number end)
+                   (parse-integer clean :start number-start :junk-allowed t)
+                 (declare (ignore end))
+                 (setf found number)))
+             (setf start (1+ marker-start)))
+    found))
+
+
+;;;; -- Files and test programs --
+
+(defun integration-path (name)
+  "Return NAME below the integration temporary directory."
+  (concatenate 'string *integration-directory* name))
+
+(defun integration-output-path (kind)
+  "Return a fresh temporary output path tagged with KIND."
+  (integration-path
+   (format nil "result-~d.~a" (incf *integration-file-counter*) kind)))
+
+(defun integration-read-file (path)
+  "Read the UTF-8 text file at PATH completely."
+  (with-open-file (stream path
+                          :direction ':input
+                          :external-format ':utf-8)
+    (let ((text (make-string (file-length stream))))
+      (let ((end (read-sequence text stream)))
+        (if (= end (length text)) text (subseq text 0 end))))))
+
+(defun integration-write-file (path contents)
+  "Write CONTENTS as UTF-8 text to PATH."
+  (ensure-directories-exist path)
+  (with-open-file (stream path
+                          :direction ':output
+                          :if-exists ':supersede
+                          :if-does-not-exist ':create
+                          :external-format ':utf-8)
+    (write-string contents stream))
+  path)
+
+(defun integration-write-octets (path octets)
+  "Write OCTETS to PATH without character encoding."
+  (with-open-file (stream path
+                          :direction ':output
+                          :if-exists ':supersede
+                          :if-does-not-exist ':create
+                          :element-type '(unsigned-byte 8))
+    (write-sequence octets stream))
+  path)
+
+(defun integration-read-octets (path)
+  "Read PATH as an octet vector."
+  (with-open-file (stream path
+                          :direction ':input
+                          :element-type '(unsigned-byte 8))
+    (let ((octets (make-array (file-length stream)
+                              :element-type '(unsigned-byte 8))))
+      (read-sequence octets stream)
+      octets)))
+
+(defun integration-write-program (name contents)
+  "Create executable test program NAME with CONTENTS and return its path."
+  (let ((path (concatenate 'string *integration-bin-directory* name)))
+    (integration-write-file path contents)
+    (let ((process (ccl:run-program "/usr/bin/chmod" (list "755" path)
+                                    :input nil :output nil :error nil
+                                    :wait t)))
+      (multiple-value-bind (state code)
+          (ccl:external-process-status process)
+        (integration-ensure (and (eq state ':exited) (zerop code))
+                            "chmod failed for ~a" path)))
+    path))
+
+(defun integration-install-programs ()
+  "Install deterministic prompt and child programs used by the suite."
+  (ensure-directories-exist
+   (concatenate 'string *integration-bin-directory* ".keep"))
+  (integration-write-program
+   "starship"
+   "#!/bin/sh
+file=$CCLSH_TEST_ROOT/prompt-count
+n=0
+if test -r \"$file\"; then read n < \"$file\"; fi
+n=$((n + 1))
+printf '%s\\n' \"$n\" > \"$file\"
+printf '__CCLSH_PROMPT_%s__ ' \"$n\"
+")
+  (integration-write-program
+   "pgid-left"
+   "#!/bin/sh
+ps -o pgid= -p $$ | tr -d ' '
+")
+  (integration-write-program
+   "pgid-right"
+   "#!/bin/sh
+IFS= read -r left
+right=$(ps -o pgid= -p $$ | tr -d ' ')
+printf '__PGIDS__%s:%s\\n' \"$left\" \"$right\"
+")
+  (integration-write-program
+   "longproducer"
+   "#!/bin/sh
+trap 'printf \"__LONG_CONTINUED__\\n\"' CONT
+group=$(ps -o pgid= -p $$ | tr -d ' ')
+foreground()
+{
+    test \"$(ps -o tpgid= -p $$ | tr -d ' ')\" = \"$group\"
+}
+while ! foreground; do sleep 0.01; done
+printf '__LONG_STARTED__\\n'
+while :; do
+    sleep 0.2
+    if foreground; then printf '__LONG_TICK__\\n'; fi
+done
+")
+  (integration-write-program
+   "observed-cat"
+   "#!/bin/sh
+group=$(ps -o pgid= -p $$ | tr -d ' ')
+exec 3<&0
+cat <&3 &
+child=$!
+foreground=0
+while kill -0 \"$child\" 2>/dev/null; do
+    terminal=$(ps -o tpgid= -p $$ | tr -d ' ')
+    if test \"$terminal\" = \"$group\"; then
+        if test \"$foreground\" -eq 0; then
+            printf '__OBSERVED_CAT_FOREGROUND__\\n' >&2
+            foreground=1
+        fi
+    else
+        foreground=0
+    fi
+    sleep 0.05
+done
+wait \"$child\"
+")
+  (integration-write-program
+   "modecheck"
+   "#!/bin/sh
+if stty -a | tr ';' '\\n' | grep -Eq '(^|[[:space:]])-echo([[:space:]]|$)'; then
+    printf '__ECHO_OFF__\\n'
+else
+    printf '__ECHO_ON__\\n'
+fi
+")
+  (integration-write-program
+   "set-noecho"
+   "#!/bin/sh
+stty -echo
+")
+  (integration-write-program
+   "stop-noecho"
+   "#!/bin/sh
+stty -echo
+printf '__NOECHO_SET__\\n'
+kill -STOP $$
+stty echo
+printf '__MODE_RESUMED__\\n'
+sleep 30
+")
+  (integration-write-program
+   "record-sleeper"
+   "#!/bin/sh
+printf '%s\\n' $$ > \"$CCLSH_TEST_ROOT/spawn.pid\"
+exec sleep 30
+")
+  (integration-write-program
+   "bounded-session"
+   "#!/bin/sh
+sidfile=$1
+seconds=$2
+shift 2
+printf '%s\\n' $$ > \"$sidfile\"
+exec /usr/bin/timeout --signal=TERM --kill-after=1 \"$seconds\" \"$@\"
+")
+  (integration-write-program
+   "mark-and-sleep"
+   "#!/bin/sh
+: > \"$CCLSH_TEST_ROOT/side-effect\"
+exec sleep 30
+")
+  (integration-write-program
+   "utf8-žluťoučký"
+   "#!/bin/sh
+printf '%s\\n' \"$1\"
+")
+  ;; An executable without a recognized image or interpreter makes
+  ;; POSIX-SPAWN fail after preceding children have been created.
+  (integration-write-program "bad-program"
+                             (format nil "not an executable image~%")))
+
+(defun integration-environment ()
+  "Environment overrides shared by direct and interactive test shells."
+  (list (cons "PATH"
+              (format nil "~a:/usr/bin:/bin" *integration-bin-directory*))
+        (cons "HOME" *integration-directory*)
+        (cons "XDG_CONFIG_HOME" *integration-directory*)
+        (cons "CCLSH_SAFE" "1")
+        (cons "CCLSH_TEST_ROOT"
+              (string-right-trim "/" *integration-directory*))
+        (cons "LANG" "C.UTF-8")
+        (cons "LC_ALL" "C.UTF-8")
+        (cons "TERM" "xterm-256color")))
+
+
+;;;; -- Bounded direct execution --
+
+(defstruct direct-result
+  "Captured result of one saved-image command."
+  (status 0 :type integer)
+  (output "" :type string)
+  (error-output "" :type string))
+
+(defun integration-kill-session (session-id)
+  "Kill every surviving process in SESSION-ID."
+  (ignore-errors
+    (ccl:run-program "/usr/bin/pkill"
+                     (list "-KILL" "-s" (princ-to-string session-id))
+                     :input nil :output nil :error nil :wait t))
+  (values))
+
+(defun integration-process-status (process)
+  "Return conventional integer status for completed PROCESS."
+  (multiple-value-bind (state code)
+      (ccl:external-process-status process)
+    (case state
+      (:exited (or code 1))
+      (:signaled (+ 128 (or code 0)))
+      (t 125))))
+
+(defun integration-run (command &key (timeout 10))
+  "Run saved cclsh -c COMMAND in a private session with a hard timeout."
+  (let ((output-path (integration-output-path "out"))
+        (error-path  (integration-output-path "err"))
+        (session-path (integration-output-path "sid"))
+        (process nil)
+        (session-id nil)
+        (completed nil))
+    (unwind-protect
+        (progn
+          (setf process
+                (ccl:run-program
+                 "/usr/bin/setsid"
+                 (list "--wait"
+                       (concatenate 'string *integration-bin-directory*
+                                    "bounded-session")
+                       session-path
+                       (princ-to-string timeout)
+                       *integration-binary* "-c" command)
+                 :input nil
+                 :output output-path
+                 :if-output-exists ':supersede
+                 :error error-path
+                 :if-error-exists ':supersede
+                 :env (integration-environment)
+                 :wait nil
+                 :external-format ':utf-8))
+          (setf completed
+                (ccl:timed-wait-on-semaphore
+                 (ccl::external-process-completed process)
+                 (+ timeout 3)))
+          (when (probe-file session-path)
+            (setf session-id
+                  (parse-integer
+                   (string-trim '(#\space #\tab #\newline #\return)
+                                (integration-read-file session-path)))))
+          (unless completed
+            (when session-id
+              (integration-kill-session session-id))
+            (ccl:timed-wait-on-semaphore
+             (ccl::external-process-completed process) 2))
+          (let ((status (if completed
+                            (integration-process-status process)
+                            124)))
+            (when (and (= status 124) session-id)
+              (integration-kill-session session-id))
+            (make-direct-result
+             :status status
+             :output (if (probe-file output-path)
+                         (integration-read-file output-path)
+                         "")
+             :error-output (if (probe-file error-path)
+                               (integration-read-file error-path)
+                               ""))))
+      (when (and process (not completed) session-id)
+        (integration-kill-session session-id))
+      (ignore-errors (delete-file output-path))
+      (ignore-errors (delete-file error-path))
+      (ignore-errors (delete-file session-path)))))
+
+(defun integration-require-success (result context)
+  "Require RESULT to have status zero, reporting its captured tail."
+  (integration-ensure
+   (zerop (direct-result-status result))
+   "~a exited ~d~%stdout: ~a~%stderr: ~a"
+   context
+   (direct-result-status result)
+   (integration-tail (direct-result-output result))
+   (integration-tail (direct-result-error-output result))))
+
+
+;;;; -- Direct pipeline checks --
+
+(defun integration-check-no-polling ()
+  "Require process and job state changes to be event driven."
+  (dolist (path '("source/process.lisp"
+                  "source/jobs.lisp"
+                  "source/pipeline.lisp"))
+    (let ((source (string-downcase (integration-read-file path))))
+      (integration-ensure (null (search "/proc/" source))
+                          "~a still reads /proc for process state" path)
+      (integration-ensure (null (search "(sleep " source))
+                          "~a still sleeps while polling process state" path))))
+
+(defun integration-check-process-groups ()
+  "Require both external pipeline stages to share one process group."
+  (let* ((form
+           "(multiple-value-bind (text status)
+                (capture (pgid-left) (pgid-right))
+              (format t \"__PGID_CAPTURE__~a__PGID_STATUS__~d~%\"
+                      text status))")
+         (result (integration-run form))
+         (output (direct-result-output result))
+         (clean  (integration-clean-text output))
+         (start  (search "__PGIDS__" clean)))
+    (integration-require-success result "same-PGID pipeline")
+    (integration-ensure start "pipeline did not print PGIDs: ~a" clean)
+    (let* ((left-start (+ start (length "__PGIDS__")))
+           (colon (position #\: clean :start left-start))
+           (end (and colon
+                     (position-if-not #'digit-char-p clean
+                                      :start (1+ colon)))))
+      (integration-ensure colon "malformed PGID output: ~a" clean)
+      (let ((left  (parse-integer clean :start left-start :end colon
+                                  :junk-allowed t))
+            (right (parse-integer clean :start (1+ colon)
+                                  :end (or end (length clean))
+                                  :junk-allowed t)))
+        (integration-ensure (and left right (= left right))
+                            "pipeline stages used PGIDs ~s and ~s"
+                            left right)))
+    (integration-ensure
+     (zerop (or (integration-integer-after "__PGID_STATUS__" output) -1))
+     "same-PGID pipeline returned a nonzero status")))
+
+(defun integration-check-fast-leaders ()
+  "Stress pipelines whose process-group leader exits immediately."
+  (let ((result
+          (integration-run
+           "(progn
+              (loop repeat 100
+                    for status = (pipe (true) (true))
+                    unless (zerop status)
+                      do (error \"fast pipeline returned ~d\" status))
+              (format t \"__FAST_LEADERS_OK__~%\"))"
+           :timeout 20)))
+    (integration-require-success result "fast pipeline leaders")
+    (integration-ensure
+     (integration-contains-p "__FAST_LEADERS_OK__"
+                             (direct-result-output result))
+     "fast-leader loop did not finish")))
+
+(defun integration-check-sigpipe ()
+  "Stress YES into HEAD and require the deciding status to remain zero."
+  (let ((result
+          (integration-run
+           "(progn
+              (loop repeat 40
+                    do (multiple-value-bind (text status)
+                           (capture (yes) (head \"-n\" \"1\"))
+                         (unless (and (string= text \"y\")
+                                      (zerop status))
+                           (error \"yes/head produced ~s with status ~d\"
+                                  text status))))
+              (format t \"__SIGPIPE_OK__~%\"))"
+           :timeout 20)))
+    (integration-require-success result "yes/head SIGPIPE stress")
+    (integration-ensure
+     (integration-contains-p "__SIGPIPE_OK__" (direct-result-output result))
+     "yes/head stress did not finish")))
+
+(defun integration-check-ignored-input ()
+  "Require a builtin that ignores its input to close the upstream pipe."
+  (let* ((result
+           (integration-run
+            "(progn
+               (defcommand ignore-input ()
+                 (format t \"ignored-input-ok~%\")
+                 0)
+               (format t \"__IGNORE_STATUS__~d~%\"
+                       (pipe (yes) (ignore-input))))"))
+         (status (integration-integer-after
+                  "__IGNORE_STATUS__" (direct-result-output result))))
+    (integration-require-success result "builtin ignoring input")
+    (integration-ensure (eql status 0)
+                        "builtin ignoring input returned ~s" status)
+    (integration-ensure
+     (integration-contains-p "ignored-input-ok" (direct-result-output result))
+     "builtin output was lost")))
+
+(defun integration-check-large-stream ()
+  "Require a builtin middle stage to relay a pipe larger than buffers."
+  (let* ((result
+           (integration-run
+            "(progn
+               (defcommand relay-lines ()
+                 (loop for line = (read-line *standard-input* nil nil)
+                       while line
+                       do (write-line line))
+                 0)
+               (multiple-value-bind (text status)
+                   (capture (seq \"1\" \"50000\")
+                            (relay-lines)
+                            (wc \"-l\"))
+                 (format t \"__LARGE_COUNT__~a__LARGE_STATUS__~d~%\"
+                         text status)))"
+            :timeout 20))
+         (output (direct-result-output result)))
+    (integration-require-success result "large builtin stream")
+    (integration-ensure
+     (integration-contains-p "__LARGE_COUNT__50000" output)
+     "large stream was truncated: ~a" (integration-tail output))
+    (integration-ensure
+     (zerop (or (integration-integer-after "__LARGE_STATUS__" output) -1))
+     "large stream returned a nonzero status")))
+
+(defun integration-check-utf8 ()
+  "Exercise UTF-8 across builtins, children, argv, files and capture."
+  (let* ((text "Příliš žluťoučký kůň 🐈")
+         (file (integration-path "výstup-žluťoučký.txt"))
+         (program (concatenate 'string *integration-bin-directory*
+                               "utf8-žluťoučký"))
+         (form
+           (format nil
+                   "(progn
+                      (defcommand emit-unicode ()
+                        (write-line ~s)
+                        0)
+                      (defcommand relay-unicode ()
+                        (loop for line = (read-line *standard-input* nil nil)
+                              while line do (write-line line))
+                        0)
+                      (multiple-value-bind (value status)
+                          (capture (emit-unicode) (cat))
+                        (format t
+                                \"__UTF8_BUILTIN__~~a__UTF8_A_STATUS__~~d~~%\"
+                                value status))
+                      (multiple-value-bind (value status)
+                          (capture (printf \"%s\\n\" ~s)
+                                   (relay-unicode))
+                        (format t
+                                \"__UTF8_EXTERNAL__~~a__UTF8_B_STATUS__~~d~~%\"
+                                value status))
+                      (format t \"__UTF8_FILE_STATUS__~~d~~%\"
+                              (pipe (emit-unicode) (to ~s)))
+                      (multiple-value-bind (value status)
+                          (capture (from ~s) (cat))
+                        (format t
+                                \"__UTF8_FILE_READ__~~a__UTF8_D_STATUS__~~d~~%\"
+                                value status))
+                      (multiple-value-bind (value status)
+                          (capture (~s ~s))
+                        (format t
+                                \"__UTF8_EXEC__~~a__UTF8_C_STATUS__~~d~~%\"
+                                value status)))"
+                   text text file file program text))
+         (result (integration-run form :timeout 15))
+         (output (direct-result-output result)))
+    (integration-require-success result "UTF-8 pipelines")
+    (dolist (marker '("__UTF8_BUILTIN__"
+                      "__UTF8_EXTERNAL__"
+                      "__UTF8_FILE_READ__"
+                      "__UTF8_EXEC__"))
+      (integration-ensure
+       (integration-contains-p (concatenate 'string marker text) output)
+       "UTF-8 value after ~a was corrupted: ~a" marker
+       (integration-tail output)))
+    (dolist (marker '("__UTF8_A_STATUS__"
+                      "__UTF8_B_STATUS__"
+                      "__UTF8_C_STATUS__"
+                      "__UTF8_D_STATUS__"
+                      "__UTF8_FILE_STATUS__"))
+      (integration-ensure
+       (zerop (or (integration-integer-after marker output) -1))
+       "UTF-8 operation ~a failed" marker))
+    (integration-ensure
+     (string= (format nil "~a~%" text) (integration-read-file file))
+     "UTF-8 redirected file did not round-trip")))
+
+(defun integration-check-unicode-environment ()
+  "Require Unicode environment mutation, lookup and child inheritance."
+  (let* ((name "CCLSH_UTF8_INHERITANCE")
+         (text "Příliš žluťoučký kůň 🐈 你好")
+         (shell-code (format nil "printf '%s' \"$~a\"" name))
+         (form
+           (format nil
+                   "(progn
+                      (setenv ~s ~s)
+                      (format t \"__ENV_GET__~~a__ENV_GET_END__~~%\"
+                              (getenv ~s))
+                      (multiple-value-bind (value status)
+                          (capture (~s \"sh\" \"-c\" ~s))
+                        (format t
+                                \"__ENV_CHILD__~~a__ENV_CHILD_END__~~d~~%\"
+                                value status))
+                      (unset ~s)
+                      (format t \"__ENV_UNSET__~~s~~%\" (getenv ~s)))"
+                   name text name "/usr/bin/env" shell-code name name))
+         (result (integration-run form))
+         (output (direct-result-output result)))
+    (integration-require-success result "Unicode environment inheritance")
+    (integration-ensure
+     (integration-contains-p
+      (format nil "__ENV_GET__~a__ENV_GET_END__" text) output)
+     "GETENV did not return the exact Unicode value: ~a"
+     (integration-tail output))
+    (integration-ensure
+     (integration-contains-p
+      (format nil "__ENV_CHILD__~a__ENV_CHILD_END__0" text) output)
+     "child environment did not inherit the exact Unicode value: ~a"
+     (integration-tail output))
+    (integration-ensure
+     (integration-contains-p "__ENV_UNSET__NIL" output)
+     "UNSET did not remove the Unicode-valued environment entry: ~a"
+     (integration-tail output))))
+
+(defun integration-check-binary-copy ()
+  "Require redirect-only pipelines to copy every octet exactly."
+  (let* ((input (integration-path "binární-vstup-🐈.dat"))
+         (output (integration-path "binární-výstup-🐈.dat"))
+         (octets (make-array 65539 :element-type '(unsigned-byte 8))))
+    (dotimes (index (length octets))
+      (setf (aref octets index) (mod (+ (* index 73) 19) 256)))
+    (integration-write-octets input octets)
+    (let* ((result
+             (integration-run
+              (format nil
+                      "(format t \"__BINARY_COPY__~~d~~%\"
+                               (pipe (from ~s) (to ~s)))"
+                      input output)))
+           (status
+             (integration-integer-after
+              "__BINARY_COPY__" (direct-result-output result))))
+      (integration-require-success result "redirect-only binary copy")
+      (integration-ensure (eql status 0)
+                          "redirect-only copy returned ~s" status)
+      (integration-ensure
+       (and (probe-file output)
+            (equalp octets (integration-read-octets output)))
+       "redirect-only copy changed binary data"))))
+
+(defun integration-check-presentation ()
+  "Require captures and redirected builtin streams to contain no ANSI."
+  (let* ((output-file (integration-path "plain-output.txt"))
+         (error-file  (integration-path "plain-error.txt"))
+         (form
+           (format nil
+                   "(progn
+                      (defcommand painted ()
+                        (format t \"~~a~~%\"
+                                (cclsh::ansi-colorize \"PLAIN-OUT\" :red))
+                        (format *error-output* \"~~a~~%\"
+                                (cclsh::ansi-colorize \"PLAIN-ERR\" :blue))
+                        0)
+                      (multiple-value-bind (text status)
+                          (capture (painted) (merge-error))
+                        (format t
+                                \"__PAINT_CAPTURE__~~a__PAINT_STATUS__~~d~~%\"
+                                text status))
+                      (format t \"__PAINT_FILE_STATUS__~~d~~%\"
+                              (pipe (painted)
+                                    (error-to ~s)
+                                    (to ~s))))"
+                   error-file output-file))
+         (result (integration-run form))
+         (output (direct-result-output result)))
+    (integration-require-success result "plain capture and redirection")
+    (integration-ensure (and (probe-file output-file) (probe-file error-file))
+                        "redirected presentation files were not created")
+    (let ((redirected-output (integration-read-file output-file))
+          (redirected-error  (integration-read-file error-file)))
+      (integration-ensure (null (find (code-char 27) output))
+                          "capture contains an ANSI escape")
+      (integration-ensure (null (find (code-char 27) redirected-output))
+                          "redirected stdout contains an ANSI escape")
+      (integration-ensure (null (find (code-char 27) redirected-error))
+                          "redirected stderr contains an ANSI escape")
+      (integration-ensure
+       (and (integration-contains-p "PLAIN-OUT" output)
+            (integration-contains-p "PLAIN-ERR" output)
+            (string= redirected-output (format nil "PLAIN-OUT~%"))
+            (string= redirected-error (format nil "PLAIN-ERR~%")))
+       "plain presentation output was lost or changed"))))
+
+(defun integration-check-dev-full ()
+  "Require output failures from external and builtin stages to be nonzero."
+  (let* ((external
+           (integration-run
+            "(format t \"__FULL_EXTERNAL__~d~%\"
+                     (pipe (yes) (head \"-c\" \"65536\")
+                           (to \"/dev/full\")))"))
+         (external-status
+           (integration-integer-after "__FULL_EXTERNAL__"
+                                      (direct-result-output external)))
+         (builtin
+           (integration-run
+            "(progn
+               (defcommand fill-full ()
+                 (dotimes (index 65536)
+                   (declare (ignore index))
+                   (write-char #\\x))
+                 (finish-output)
+                 0)
+               (format t \"__FULL_BUILTIN__~d~%\"
+                       (pipe (fill-full) (to \"/dev/full\"))))"))
+         (builtin-status
+           (integration-integer-after "__FULL_BUILTIN__"
+                                      (direct-result-output builtin))))
+    (integration-ensure
+     (or (plusp (direct-result-status external))
+         (and external-status (plusp external-status)))
+     "external /dev/full failure was hidden: exit ~d, output ~a, error ~a"
+     (direct-result-status external)
+     (integration-tail (direct-result-output external))
+     (integration-tail (direct-result-error-output external)))
+    (integration-ensure
+     (or (plusp (direct-result-status builtin))
+         (and builtin-status (plusp builtin-status)))
+     "builtin /dev/full failure was hidden: exit ~d, output ~a, error ~a"
+     (direct-result-status builtin)
+     (integration-tail (direct-result-output builtin))
+     (integration-tail (direct-result-error-output builtin)))))
+
+(defun integration-check-redirect-arity ()
+  "Require every redirect pseudo-stage to enforce its exact arity."
+  (dolist (case
+            `(("to with no path" . "(pipe (echo \"x\") (to))")
+              ("to with two paths" .
+               ,(format nil "(pipe (echo \"x\") (to ~s ~s))"
+                        (integration-path "one") (integration-path "two")))
+              ("from with two paths" .
+               ,(format nil "(pipe (from ~s ~s) (cat))"
+                        (integration-path "one") (integration-path "two")))
+              ("merge-error with an argument" .
+               "(capture (echo \"x\") (merge-error \"extra\"))")))
+    (let ((result (integration-run (rest case))))
+      (integration-ensure
+       (plusp (direct-result-status result))
+       "~a was accepted: ~a" (first case)
+       (integration-tail (direct-result-output result))))))
+
+(defun integration-delay (seconds)
+  "Wait SECONDS without polling."
+  (ccl:timed-wait-on-semaphore (ccl:make-semaphore) seconds)
+  (values))
+
+(defun integration-process-alive-p (pid)
+  "True when PID still names a process visible to this user."
+  (zerop (ccl:external-call "kill" :int pid :int 0 :int)))
+
+(defun integration-check-failure-cleanup ()
+  "Require redirect and spawn failures to leave no children or effects."
+  (let* ((marker (integration-path "side-effect"))
+         (missing-output (integration-path "missing/directory/out"))
+         (redirect-result
+           (integration-run
+            (format nil "(pipe (mark-and-sleep) (to ~s))"
+                    missing-output))))
+    (integration-ensure (plusp (direct-result-status redirect-result))
+                        "bad redirect unexpectedly succeeded")
+    (integration-ensure (null (probe-file marker))
+                        "a stage ran before redirect preflight finished"))
+  (let* ((pid-path (integration-path "spawn.pid"))
+         (spawn-result
+           (integration-run "(pipe (record-sleeper) (bad-program))")))
+    (integration-ensure (plusp (direct-result-status spawn-result))
+                        "bad executable unexpectedly succeeded")
+    (when (probe-file pid-path)
+      (let ((pid (parse-integer
+                  (string-trim '(#\space #\tab #\newline #\return)
+                               (integration-read-file pid-path)))))
+        (loop repeat 20
+              while (integration-process-alive-p pid)
+              do (integration-delay 0.05))
+        (when (integration-process-alive-p pid)
+          (ccl:external-call "kill" :int pid :int 9 :int)
+          (integration-fail "spawn failure leaked child pid ~d" pid)))))
+  (let ((result
+          (integration-run
+           (format nil
+                   "(progn
+                      (dotimes (index 25)
+                        (declare (ignore index))
+                        (ignore-errors
+                          (pipe (from ~s) (cat))))
+                      (format t \"__REDIRECT_CLEANUP_OK__~%\"))"
+                   (integration-path "does-not-exist")))))
+    (integration-require-success result "repeated redirect failures")
+    (integration-ensure
+     (integration-contains-p "__REDIRECT_CLEANUP_OK__"
+                             (direct-result-output result))
+     "shell did not survive repeated redirect failures"))
+  (let ((result
+          (integration-run
+           "(progn
+              (defparameter *injected-task-ran* nil)
+              (defcommand injected-task ()
+                (setf *injected-task-ran* t)
+                0)
+              (dotimes (index 25)
+                (declare (ignore index))
+                (let ((starts 0)
+                      (starter cclsh::*pipeline-task-starter*))
+                  (let ((cclsh::*pipeline-task-starter*
+                          (lambda (&rest arguments)
+                            (incf starts)
+                            (if (= starts 2)
+                                (error \"injected task start failure\")
+                                (apply starter arguments)))))
+                    (handler-case
+                        (capture (injected-task))
+                      (error () nil)))))
+              (format t \"__TASK_START_CLEANUP__~s~%\"
+                      *injected-task-ran*))")))
+    (integration-require-success result "partial task-start cleanup")
+    (integration-ensure
+     (integration-contains-p "__TASK_START_CLEANUP__NIL"
+                             (direct-result-output result))
+     "a builtin ran or cleanup stalled after task-start failure: ~a"
+     (integration-tail (direct-result-output result)))))
+
+
+;;;; -- Interactive PTY driver --
+
+(defstruct integration-session
+  "One cclsh instance running below util-linux SCRIPT's PTY."
+  process
+  input
+  output
+  reader-process
+  (lock (ccl:make-lock "cclsh integration transcript"))
+  (event (ccl:make-semaphore))
+  (buffer (make-array 4096
+                      :element-type 'character
+                      :adjustable t
+                      :fill-pointer 0))
+  (prompt-number 0 :type integer))
+
+(defun integration-shell-quote (text)
+  "Quote TEXT as one POSIX shell word."
+  (with-output-to-string (stream)
+    (write-char #\' stream)
+    (loop for char across text
+          do (if (char= char #\')
+                 (write-string "'\\''" stream)
+                 (write-char char stream)))
+    (write-char #\' stream)))
+
+(defun integration-session-command-line ()
+  "Return SCRIPT's shell command for the isolated cclsh session."
+  (let ((parts
+          (append (list "/usr/bin/env" "-i")
+                  (mapcar (lambda (pair)
+                            (format nil "~a=~a" (first pair) (rest pair)))
+                          (integration-environment))
+                  (list *integration-binary*))))
+    (format nil "~{~a~^ ~}" (mapcar #'integration-shell-quote parts))))
+
+(defun integration-session-read-loop (session)
+  "Drain SESSION's PTY transcript until SCRIPT closes it."
+  (handler-case
+      (loop for char = (read-char (integration-session-output session)
+                                  nil nil)
+            while char
+            do (ccl:with-lock-grabbed ((integration-session-lock session))
+                 (vector-push-extend char
+                                     (integration-session-buffer session)))
+               (ccl:signal-semaphore (integration-session-event session)))
+    (serious-condition () nil))
+  (ccl:signal-semaphore (integration-session-event session))
+  (values))
+
+(defun integration-session-text (session)
+  "Return an atomic snapshot of SESSION's transcript."
+  (ccl:with-lock-grabbed ((integration-session-lock session))
+    (coerce (integration-session-buffer session) 'string)))
+
+(defun integration-session-position (session)
+  "Return the current transcript length for SESSION."
+  (ccl:with-lock-grabbed ((integration-session-lock session))
+    (length (integration-session-buffer session))))
+
+(defun integration-session-wait (session marker &key (start 0) (timeout 8))
+  "Wait for MARKER in SESSION at or after START and return its position."
+  (let ((deadline (+ (get-internal-real-time)
+                     (* timeout internal-time-units-per-second))))
+    (loop
+      (let* ((text (integration-session-text session))
+             (found (search marker text :start2 (min start (length text)))))
+        (when found
+          (return found))
+        (let ((remaining
+                (/ (- deadline (get-internal-real-time))
+                   internal-time-units-per-second)))
+          (when (<= remaining 0)
+            (integration-fail
+             "timed out waiting for ~s; transcript tail:~%~a"
+             marker (integration-tail text)))
+          (ccl:timed-wait-on-semaphore
+           (integration-session-event session) (min remaining 0.25)))))))
+
+(defun integration-session-send (session text)
+  "Send raw TEXT to SESSION's PTY."
+  (write-string text (integration-session-input session))
+  (force-output (integration-session-input session))
+  (values))
+
+(defun integration-session-send-line (session line)
+  "Send LINE and a newline to SESSION."
+  (integration-session-send session (concatenate 'string line (string #\newline))))
+
+(defun integration-session-await-prompt (session start &key (timeout 8))
+  "Wait for SESSION's next uniquely numbered prompt."
+  (let* ((number (incf (integration-session-prompt-number session)))
+         (marker (format nil "__CCLSH_PROMPT_~d__" number)))
+    (integration-session-wait session marker :start start :timeout timeout)))
+
+(defun integration-session-command (session line &key (timeout 8))
+  "Run interactive LINE and return its transcript through the next prompt."
+  (let ((start (integration-session-position session)))
+    (integration-session-send-line session line)
+    (let ((end (integration-session-await-prompt session start
+                                                  :timeout timeout)))
+      (subseq (integration-session-text session) start end))))
+
+(defun integration-session-start ()
+  "Start an isolated interactive saved-image session below a real PTY."
+  (ignore-errors (delete-file (integration-path "prompt-count")))
+  (let* ((process
+           (ccl:run-program
+            "/usr/bin/script"
+            (list "-qefc" (integration-session-command-line) "/dev/null")
+            :input ':stream
+            :output ':stream
+            :error ':output
+            :wait nil
+            :external-format ':utf-8))
+         (session
+           (make-integration-session
+            :process process
+            :input (ccl:external-process-input-stream process)
+            :output (ccl:external-process-output-stream process))))
+    (setf (integration-session-reader-process session)
+          (ccl:process-run-function
+           "cclsh integration PTY reader"
+           (lambda () (integration-session-read-loop session))))
+    (integration-session-wait session "__CCLSH_PROMPT_1__" :timeout 12)
+    (setf (integration-session-prompt-number session) 1)
+    session))
+
+(defun integration-session-stop (session)
+  "Stop SESSION and close its streams, even after a failed check."
+  (when session
+    (ignore-errors
+      (integration-session-send-line session "stty echo"))
+    (ignore-errors
+      (integration-session-send-line session "exit"))
+    (unless (ccl:timed-wait-on-semaphore
+             (ccl::external-process-completed
+              (integration-session-process session)) 2)
+      (ignore-errors
+        (ccl:signal-external-process
+         (integration-session-process session) 15 :error-if-exited nil))
+      (unless (ccl:timed-wait-on-semaphore
+               (ccl::external-process-completed
+                (integration-session-process session)) 1)
+        (ignore-errors
+          (ccl:signal-external-process
+           (integration-session-process session) 9 :error-if-exited nil))))
+    (ignore-errors (close (integration-session-input session)))
+    (ignore-errors (close (integration-session-output session)))
+    (ignore-errors
+      (ccl:join-process (integration-session-reader-process session))))
+  (values))
+
+(defun integration-session-interrupt (session character start &key (timeout 8))
+  "Send control CHARACTER, then return output through the next prompt."
+  (integration-session-send session (string character))
+  (let ((end (integration-session-await-prompt session start
+                                                :timeout timeout)))
+    (subseq (integration-session-text session) start end)))
+
+(defun integration-session-last-status (session)
+  "Query and return cclsh's previous command status in SESSION."
+  (let* ((output
+           (integration-session-command
+            session
+            "(format t \"__LAST_STATUS__~d~%\" *last-status*)"))
+         (status (integration-integer-after "__LAST_STATUS__" output)))
+    (integration-ensure status "shell did not report *LAST-STATUS*: ~a"
+                        (integration-tail output))
+    status))
+
+(defun integration-session-builtin-count (session)
+  "Query the integration ticker's shared counter in SESSION."
+  (let* ((output
+           (integration-session-command
+            session
+            "(format t \"__BUILTIN_COUNT__~d~%\"
+                     *integration-builtin-count*)"))
+         (count (integration-integer-after "__BUILTIN_COUNT__" output)))
+    (integration-ensure count "shell did not report the builtin count: ~a"
+                        (integration-tail output))
+    count))
+
+
+;;;; -- Interactive job and terminal checks --
+
+(defun integration-check-interactive ()
+  "Exercise terminal signals, jobs, resume events and termios retention."
+  (let ((session nil))
+    (unwind-protect
+        (progn
+          (setf session (integration-session-start))
+
+          ;; Ctrl-C must reach every member, including the last stage
+          ;; whose signal determines the pipeline status.
+          (let ((start (integration-session-position session)))
+            (integration-session-send-line
+             session "(pipe (longproducer) (cat))")
+            (integration-session-wait session "__LONG_STARTED__"
+                                      :start start :timeout 5)
+            (integration-session-interrupt session (code-char 3) start)
+            (integration-ensure (= 130 (integration-session-last-status session))
+                                "Ctrl-C pipeline status was not 130"))
+
+          ;; Stop a whole pipeline, continue it in the background, then
+          ;; attend it again and interrupt it in the foreground.
+          (let ((start (integration-session-position session)))
+            (integration-session-send-line
+             session "(pipe (longproducer) (cat))")
+            (integration-session-wait session "__LONG_STARTED__"
+                                      :start start :timeout 5)
+            (let ((stopped
+                    (integration-session-interrupt session (code-char 26)
+                                                   start :timeout 8)))
+              (integration-ensure
+               (integration-contains-p "Stopped"
+                                       (integration-clean-text stopped))
+               "Ctrl-Z did not announce a stopped job: ~a"
+               (integration-tail stopped))))
+          (integration-ensure (= 148 (integration-session-last-status session))
+                              "Ctrl-Z pipeline status was not 148")
+          (let ((jobs (integration-session-command session "jobs")))
+            (integration-ensure
+             (integration-contains-p "Stopped" (integration-clean-text jobs))
+             "jobs did not report the stopped pipeline: ~a"
+             (integration-tail jobs)))
+          (integration-session-command session "bg")
+          (let ((jobs (integration-session-command session "jobs")))
+            (integration-ensure
+             (integration-contains-p "Running" (integration-clean-text jobs))
+             "bg did not produce a running job: ~a"
+             (integration-tail jobs)))
+          (let ((start (integration-session-position session)))
+            (integration-session-send-line session "fg")
+            (integration-session-wait session "__LONG_TICK__"
+                                      :start start :timeout 5)
+            (integration-session-interrupt session (code-char 3) start)
+            (integration-ensure (= 130 (integration-session-last-status session))
+                                "foreground-resumed pipeline status was not 130"))
+
+          ;; A normally completed program may deliberately change tty
+          ;; modes. A stop restores the pre-attendance shell modes, while
+          ;; fg reapplies the stopped job's modes before SIGCONT.
+          (let ((initial (integration-session-command session "modecheck")))
+            (integration-ensure
+             (integration-contains-p "__ECHO_ON__" initial)
+             "PTY did not begin with echo enabled"))
+          (integration-session-command session "set-noecho")
+          (let ((changed (integration-session-command session "modecheck")))
+            (integration-ensure
+             (integration-contains-p "__ECHO_OFF__" changed)
+             "completed stty change was not preserved: ~a"
+             (integration-tail changed)))
+          (integration-session-command session "stty echo")
+
+          (let ((start (integration-session-position session)))
+            (integration-session-send-line session "stop-noecho")
+            (integration-session-wait session "__NOECHO_SET__"
+                                      :start start :timeout 5)
+            (integration-session-await-prompt session start :timeout 8))
+          (let ((restored (integration-session-command session "modecheck")))
+            (integration-ensure
+             (integration-contains-p "__ECHO_ON__" restored)
+             "stopped job leaked its terminal mode into the shell: ~a"
+             (integration-tail restored)))
+          (let ((start (integration-session-position session)))
+            (integration-session-send-line session "fg")
+            (integration-session-wait session "__MODE_RESUMED__"
+                                      :start start :timeout 5)
+            (integration-session-interrupt session (code-char 3) start))
+          (let ((restored (integration-session-command session "modecheck")))
+            (integration-ensure
+             (integration-contains-p "__ECHO_ON__" restored)
+             "terminal mode after resumed completion was not preserved: ~a"
+             (integration-tail restored))))
+      (integration-session-stop session))))
+
+(defun integration-check-builtin-job-control ()
+  "Exercise stop, bg, fg and interrupt for a long in-process builtin."
+  (let ((session nil))
+    (unwind-protect
+        (progn
+          (setf session (integration-session-start))
+          (integration-session-command
+           session
+           "(progn
+              (defparameter *integration-builtin-count* 0)
+              (defcommand integration-ticker ()
+                (loop
+                  (incf *integration-builtin-count*)
+                  (format t \"__BUILTIN_STREAM__~d~%\"
+                          *integration-builtin-count*)
+                  (force-output)
+                  (sleep 0.1))))")
+
+          ;; OBSERVED-CAT is an external last stage. Its marker is only
+          ;; emitted after the pipeline group owns the terminal.
+          (let ((start (integration-session-position session)))
+            (integration-session-send-line
+             session "(pipe (integration-ticker) (observed-cat))")
+            (integration-session-wait
+             session "__OBSERVED_CAT_FOREGROUND__" :start start :timeout 5)
+            (integration-session-wait
+             session "__BUILTIN_STREAM__" :start start :timeout 5)
+            (let ((stopped
+                    (integration-session-interrupt session (code-char 26)
+                                                   start :timeout 5)))
+              (integration-ensure
+               (integration-contains-p "Stopped"
+                                       (integration-clean-text stopped))
+               "Ctrl-Z did not stop the builtin pipeline: ~a"
+               (integration-tail stopped))))
+          (integration-ensure
+           (= 148 (integration-session-last-status session))
+           "stopped builtin pipeline status was not 148")
+
+          ;; The Lisp worker itself must be suspended, not merely blocked
+          ;; behind the stopped external consumer.
+          (let ((first (integration-session-builtin-count session)))
+            (integration-delay 0.4)
+            (let ((second (integration-session-builtin-count session)))
+              (integration-ensure
+               (= first second)
+               "builtin kept running while stopped: ~d became ~d"
+               first second)
+              (let ((jobs (integration-session-command session "jobs")))
+                (integration-ensure
+                 (integration-contains-p "Stopped"
+                                         (integration-clean-text jobs))
+                 "jobs lost the stopped builtin pipeline: ~a"
+                 (integration-tail jobs)))
+
+              ;; BG resumes both the external process group and the Lisp
+              ;; worker. Its counter and stream must become live again.
+              (let ((background-start
+                      (integration-session-position session)))
+                (integration-session-command session "bg")
+                (integration-session-wait
+                 session "__BUILTIN_STREAM__"
+                 :start background-start :timeout 3))
+              (integration-delay 0.4)
+              (let ((resumed (integration-session-builtin-count session)))
+                (integration-ensure
+                 (> resumed second)
+                 "bg did not resume the builtin: count stayed at ~d"
+                 second))
+              (let ((jobs (integration-session-command session "jobs")))
+                (integration-ensure
+                 (integration-contains-p "Running"
+                                         (integration-clean-text jobs))
+                 "jobs did not report the resumed builtin pipeline: ~a"
+                 (integration-tail jobs)))))
+
+          ;; OBSERVED-CAT resets its foreground marker while under BG, so
+          ;; this new marker proves FG completed terminal handoff.
+          (let ((start (integration-session-position session)))
+            (integration-session-send-line session "fg")
+            (integration-session-wait
+             session "__OBSERVED_CAT_FOREGROUND__"
+             :start start :timeout 5)
+            (integration-session-interrupt session (code-char 3) start
+                                           :timeout 3))
+          (integration-ensure
+           (= 130 (integration-session-last-status session))
+           "interrupted builtin pipeline status was not 130")
+
+          ;; Returning to a prompt is not enough: the in-process worker
+          ;; must be gone rather than leaking in the shared image.
+          (let ((first (integration-session-builtin-count session)))
+            (integration-delay 0.3)
+            (let ((second (integration-session-builtin-count session)))
+              (integration-ensure
+               (= first second)
+               "builtin survived Ctrl-C: ~d became ~d" first second)))
+          (let ((jobs (integration-session-command session "jobs")))
+            (integration-ensure
+             (not (or (integration-contains-p
+                       "Stopped" (integration-clean-text jobs))
+                      (integration-contains-p
+                       "Running" (integration-clean-text jobs))))
+             "completed builtin pipeline remained in jobs: ~a"
+             (integration-tail jobs))))
+      (integration-session-stop session))))
+
+(defun integration-check-builtin-tty-input ()
+  "Require a first-stage builtin to read the inherited terminal safely."
+  (let ((session nil)
+        (input "proxy input: Příliš žluťoučký 🐈"))
+    (unwind-protect
+        (progn
+          (setf session (integration-session-start))
+          (integration-session-command
+           session
+           "(defcommand integration-tty-reader ()
+              (format t \"__TTY_READER_READY__~%\")
+              (force-output)
+              (handler-case
+                  (let ((line (read-line *standard-input* nil nil)))
+                    (cond (line
+                           (format t \"__TTY_INPUT__~a~%\" line)
+                           0)
+                          (t
+                           (format *error-output* \"__TTY_EOF__~%\")
+                           1)))
+                (error (condition)
+                  (format *error-output* \"__TTY_ERROR__~a~%\" condition)
+                  1)))")
+          (let ((start (integration-session-position session)))
+            (integration-session-send-line
+             session "(pipe (integration-tty-reader) (observed-cat))")
+            (let ((runtime-start
+                    (integration-session-wait
+                     session "__OBSERVED_CAT_FOREGROUND__"
+                     :start start :timeout 5)))
+              (integration-session-send-line session input)
+              (let* ((end (integration-session-await-prompt
+                           session start :timeout 5))
+                     (output (subseq (integration-session-text session)
+                                     runtime-start end))
+                     (clean (integration-clean-text output)))
+                (integration-ensure
+                 (integration-contains-p
+                  (concatenate 'string "__TTY_INPUT__" input) clean)
+                 "typed terminal input did not reach the builtin: ~a"
+                 (integration-tail output))
+                (integration-ensure
+                 (not (or (integration-contains-p "__TTY_ERROR__" clean)
+                          (integration-contains-p "__TTY_EOF__" clean)
+                          (integration-contains-p "Input/output error" clean)
+                          (integration-contains-p "EIO" clean)))
+                 "builtin terminal proxy failed: ~a"
+                 (integration-tail output)))))
+          (integration-ensure
+           (zerop (integration-session-last-status session))
+           "builtin terminal-input pipeline returned nonzero"))
+      (integration-session-stop session))))
+
+
+;;;; -- Run --
+
+(unwind-protect
+    (progn
+      (integration-install-programs)
+      (integration-test "event-driven child state"
+                        #'integration-check-no-polling)
+      (integration-test "one process group per pipeline"
+                        #'integration-check-process-groups)
+      (integration-test "fast process-group leaders"
+                        #'integration-check-fast-leaders)
+      (integration-test "SIGPIPE stress"
+                        #'integration-check-sigpipe)
+      (integration-test "builtin ignores input"
+                        #'integration-check-ignored-input)
+      (integration-test "large builtin streaming"
+                        #'integration-check-large-stream)
+      (integration-test "UTF-8 boundaries"
+                        #'integration-check-utf8)
+      (integration-test "Unicode environment inheritance"
+                        #'integration-check-unicode-environment)
+      (integration-test "redirect-only binary copy"
+                        #'integration-check-binary-copy)
+      (integration-test "plain capture and redirection"
+                        #'integration-check-presentation)
+      (integration-test "/dev/full failures"
+                        #'integration-check-dev-full)
+      (integration-test "redirect exact arity"
+                        #'integration-check-redirect-arity)
+      (integration-test "spawn and redirect cleanup"
+                        #'integration-check-failure-cleanup)
+      (integration-test "PTY jobs, signals and terminal modes"
+                        #'integration-check-interactive)
+      (integration-test "PTY in-process builtin job control"
+                        #'integration-check-builtin-job-control)
+      (integration-test "PTY builtin terminal-input proxy"
+                        #'integration-check-builtin-tty-input))
+  (ignore-errors
+    (uiop:delete-directory-tree *integration-directory*
+                                :validate t
+                                :if-does-not-exist ':ignore)))
+
+(cond (*integration-failures*
+       (format *error-output* "~d integration check~:p failed:~%"
+               (length *integration-failures*))
+       (dolist (failure (nreverse *integration-failures*))
+         (format *error-output* "  ~a~%" failure))
+       (ccl:quit 1))
+      (t
+       (format t "All cclsh integration checks passed.~%")
+       (ccl:quit 0)))
