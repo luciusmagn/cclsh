@@ -4,10 +4,20 @@
 # after both are complete, so an interrupted build preserves the old pair.
 set -e
 cd "$(dirname "$0")/.."
-rm -f cclsh.new cclsh.image.new
-ccl -n -b -e \
+cleanup_staged_build()
+{
+    rm -f cclsh.new cclsh.image.new
+}
+trap cleanup_staged_build 0
+trap 'exit 129' 1
+trap 'exit 130' 2
+trap 'exit 143' 15
+cleanup_staged_build
+ccl -n -b \
+    -e '(setf ccl:*default-file-character-encoding* :utf-8)' \
+    -e \
     '(handler-case
-         (load "scripts/build.lisp")
+         (load "scripts/build.lisp" :external-format :utf-8)
        (serious-condition (condition)
          (format *error-output* "cclsh build loader failed: ~a~%" condition)
          (ccl:quit 1)))'
@@ -20,6 +30,28 @@ if [ ! -s cclsh.image.new ]; then
     exit 1
 fi
 chmod 755 cclsh.new
+echo "Validating saved cclsh image..."
+validation_home="$PWD/.cclsh-build-validation-home.$$"
+if [ -e "$validation_home" ]; then
+    echo "cclsh build: validation HOME already exists: $validation_home" >&2
+    exit 1
+fi
+if ! HOME="$validation_home" \
+     CCLSH_SAFE=1 \
+     CCLSH_QUICKLISP_SETUP="$validation_home/setup.lisp" \
+     LANG=C \
+     LC_ALL=C \
+     ./cclsh.new -I ./cclsh.image.new -c \
+     '(let* ((package (find-package "QL"))
+             (quickload (and package (find-symbol "QUICKLOAD" package))))
+        (unless (and quickload (fboundp quickload))
+          (error "saved image does not provide QL:QUICKLOAD"))
+        (values))'
+then
+    echo "cclsh build: staged saved-image validation failed" >&2
+    exit 1
+fi
 mv -f cclsh.image.new cclsh.image
 mv -f cclsh.new cclsh
+trap - 0 1 2 15
 echo "Built ./cclsh and ./cclsh.image"

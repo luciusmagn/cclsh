@@ -23,7 +23,9 @@ avoids an intermittent CCL 1.13 prepended-image resume failure on
 current Linux. The build requires =~/quicklisp/setup.lisp= and bakes
 Quicklisp into every saved image. Set =CCLSH_QUICKLISP_SETUP= to use a
 setup file elsewhere; an unavailable or broken setup stops the build
-before it saves. You can also run the shell from any CCL REPL:
+before it saves. Before installation, the build boots the staged image
+under an empty home directory and verifies that =QL:QUICKLOAD= is
+already present. You can also run the shell from any CCL REPL:
 
 #+begin_src lisp
 (asdf:load-system "cclsh")

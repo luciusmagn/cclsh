@@ -3,11 +3,29 @@
 ;;; Loads Quicklisp and the cclsh system into a fresh CCL, then saves a
 ;;; standalone executable. Run through scripts/build.
 
+;; These defaults must be established before loading ASDF, Quicklisp,
+;; or project source. In particular, CCL's ordinary GETENV decodes raw
+;; environment bytes as Latin-1 on Linux, so the Quicklisp override is
+;; read through libc and decoded explicitly below.
+(setf ccl:*default-file-character-encoding* ':utf-8
+      ccl:*default-external-format*
+      '(:character-encoding :utf-8 :line-termination :unix)
+      ccl:*terminal-character-encoding-name* ':utf-8)
+
+(defun build-getenv-utf-8 (name)
+  "The UTF-8 value of environment variable NAME, or NIL."
+  (ccl::with-utf-8-cstr (encoded-name name)
+    (let ((value (ccl:external-call "getenv"
+                                    :address encoded-name
+                                    :address)))
+      (unless (ccl:%null-ptr-p value)
+        (ccl::%get-utf-8-cstring value)))))
+
 (require :asdf)
 
 (defun build-quicklisp-setup-pathname ()
   "The Quicklisp setup file required by saved cclsh images."
-  (let ((override (ccl:getenv "CCLSH_QUICKLISP_SETUP")))
+  (let ((override (build-getenv-utf-8 "CCLSH_QUICKLISP_SETUP")))
     (if (and override (plusp (length override)))
         (pathname override)
         (merge-pathnames "quicklisp/setup.lisp"
@@ -33,7 +51,7 @@
     (format t "Including Quicklisp from ~a~%" setup)
     (finish-output)
     (handler-case
-        (load setup :verbose nil)
+        (load setup :verbose nil :external-format ':utf-8)
       (error (condition)
         (build-fail "could not load Quicklisp from ~a: ~a"
                     setup condition)))
@@ -46,8 +64,23 @@
 
 (build-load-quicklisp)
 
-(asdf:load-asd (truename "cclsh.asd"))
-(asdf:load-system "cclsh")
+(defun build-load-cclsh ()
+  "Load cclsh from this checkout, ignoring inherited ASDF registries."
+  (let* ((root (truename "./"))
+         (asd  (truename "cclsh.asd")))
+    (asdf:initialize-source-registry
+     `(:source-registry
+       (:directory ,root)
+       :ignore-inherited-configuration))
+    (asdf:load-asd asd)
+    (let ((loaded (truename
+                   (asdf:system-source-file
+                    (asdf:find-system "cclsh")))))
+      (unless (equal asd loaded)
+        (build-fail "ASDF selected ~a instead of ~a" loaded asd)))
+    (asdf:load-system "cclsh")))
+
+(build-load-cclsh)
 
 (defun build-git-output (arguments)
   "Trimmed output of git ARGUMENTS, or NIL when git fails."
@@ -57,7 +90,8 @@
                                        :input  nil
                                        :output output
                                        :error  nil
-                                       :wait   t)))
+                                       :wait   t
+                                       :external-format ':utf-8)))
         (multiple-value-bind (status code)
             (ccl:external-process-status process)
           (when (and (eq status ':exited) (zerop code))
@@ -77,8 +111,6 @@
 (let ((commit (build-git-commit)))
   (setf cclsh:*cclsh-build-commit* commit)
   (format t "Build commit: ~a~%" (or commit "unknown")))
-
-(setf ccl:*terminal-character-encoding-name* ':utf-8)
 
 ;; Keep the heap image separate from the kernel. On current Linux,
 ;; CCL 1.13's prepended-kernel image can intermittently resume through
