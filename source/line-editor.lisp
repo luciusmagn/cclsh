@@ -145,19 +145,24 @@
       (multiple-value-bind (end-row end-column exact-wrap)
           (editor--screen-position display prompt-width columns)
         (declare (ignore end-column))
-        (write-string (ansi-cursor-up previous-row))
-        (write-char #\return)
-        (write-string (ansi-clear-below))
-        (write-string edit-prompt)
-        (editor--write-display (highlight-line buffer))
-        (when (plusp (length suffix))
-          (editor--write-display (ansi-colorize suffix ':bright-black)))
-        (when exact-wrap
-          (write-char #\linefeed)
-          (write-char #\return))
-        (write-string (ansi-cursor-up (- end-row target-row)))
-        (write-string (ansi-cursor-column target-column))
-        (force-output)
+        (write-string (ansi-cursor-hide))
+        (unwind-protect
+             (progn
+               (write-string (ansi-cursor-up previous-row))
+               (write-char #\return)
+               (write-string (ansi-clear-below))
+               (write-string edit-prompt)
+               (editor--write-display (highlight-line buffer))
+               (when (plusp (length suffix))
+                 (editor--write-display
+                  (ansi-colorize suffix ':bright-black)))
+               (when exact-wrap
+                 (write-char #\linefeed)
+                 (write-char #\return))
+               (write-string (ansi-cursor-up (- end-row target-row)))
+               (write-string (ansi-cursor-column target-column)))
+          (write-string (ansi-cursor-show))
+          (force-output))
         target-row))))
 
 (defun editor--finish (edit-prompt prompt-width buffer columns previous-row

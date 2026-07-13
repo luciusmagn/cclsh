@@ -250,9 +250,8 @@
           (terminal-size)
         (declare (ignore rows))
         (write-string (ansi-reverse-video "⏎"))
-        (dotimes (fill (max 0 (- columns 2)))
-          (declare (ignore fill))
-          (write-char #\space))
+        (loop repeat (max 0 (- columns 2))
+              do (write-char #\space))
         (write-char #\return)
         (write-string (ansi-clear-line-right))
         (force-output))
@@ -268,6 +267,14 @@
 (defun ansi-cursor-column (column)
   "Return the sequence moving the cursor to zero-based COLUMN."
   (format nil "~c[~dG" +escape-character+ (1+ column)))
+
+(defun ansi-cursor-hide ()
+  "Return the sequence that hides the terminal cursor."
+  (format nil "~c[?25l" +escape-character+))
+
+(defun ansi-cursor-show ()
+  "Return the sequence that makes the terminal cursor visible."
+  (format nil "~c[?25h" +escape-character+))
 
 (defun ansi-clear-below ()
   "Return the sequence clearing from the cursor to the screen end."
