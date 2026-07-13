@@ -397,6 +397,16 @@
 
 ;;; Exit protection
 
+(defun shell-quit (status)
+  "Leave the shell with STATUS. A caller like cclsh -c ... | head can
+   close standard output early, making the exit-time stream flush
+   signal on the broken pipe; the error handler then falls back to a
+   hard exit instead of dropping the dying image into an endless
+   break loop."
+  (quit status :error-handler (lambda (condition)
+                                (declare (ignore condition))
+                                (external-call "_exit" :int status))))
+
 (defvar *jobs-exit-warned* nil
   "True right after the stopped jobs warning was printed, letting the
    directly following exit attempt proceed.")

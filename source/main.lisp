@@ -134,7 +134,7 @@
                              (shiftf *jobs-exit-warned* nil)))
                        (if (jobs-exit-blocked-p)
                            (setf *last-status* 1)
-                           (quit *last-status*))))
+                           (shell-quit *last-status*))))
                     (:abort
                      (setf *last-status* 130))
                     (:line
@@ -154,7 +154,7 @@
               (when (>= failures 25)
                 (format *error-output*
                         "cclsh: too many consecutive errors, giving up~%")
-                (quit 70)))))))))
+                (shell-quit 70)))))))))
 
 
 ;;; Command line arguments
@@ -170,7 +170,7 @@
   (environment-setup)
   (let ((*package* (find-package '#:cclsh-user)))
     (dispatch-line command))
-  (quit *last-status*))
+  (shell-quit *last-status*))
 
 (defun shell--run-script (path)
   "Run the file at PATH as a cclsh script and exit with the last
@@ -193,8 +193,8 @@
                 (dispatch-line line)))))
       (error (condition)
         (dispatch-report-error condition)
-        (quit 127))))
-  (quit *last-status*))
+        (shell-quit 127))))
+  (shell-quit *last-status*))
 
 (defun shell--process-arguments (arguments)
   "Handle command line ARGUMENTS. Returns only when the shell should
@@ -210,18 +210,18 @@
                         (progn
                           (format *error-output*
                                   "cclsh: -c requires an argument~%")
-                          (quit 2))))
+                          (shell-quit 2))))
                    ((string= argument "--version")
                     (format t "cclsh ~a~@[ (~a)~] (~a ~a)~%"
                             *cclsh-version*
                             *cclsh-build-commit*
                             (lisp-implementation-type)
                             (lisp-implementation-version))
-                    (quit 0))
+                    (shell-quit 0))
                    ((string= argument "--help")
                     (format t "usage: cclsh [-c command] [script] ~
                                [--version] [--help]~%")
-                    (quit 0))
+                    (shell-quit 0))
                    ((string= argument "--")
                     nil)
                    ((and (plusp (length argument))
@@ -249,4 +249,4 @@
         (main))
     (serious-condition (condition)
       (dispatch-report-error condition)
-      (quit 70))))
+      (shell-quit 70))))

@@ -56,7 +56,7 @@
                                             :junk-allowed t)
                              0)))))
         (terminal-restore)
-        (quit code))))
+        (shell-quit code))))
 
 (defcommand rehash ()
   "Forget cached PATH lookups and completion candidates."
