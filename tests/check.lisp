@@ -215,6 +215,52 @@
                                           (length show)))))))
 
 
+;;;; -- Lisp-dispatched shell status --
+
+(let ((cclsh:*last-status* 23)
+      (*standard-output* (make-broadcast-stream))
+      (*error-output* (make-broadcast-stream)))
+  (check-equal "ordinary successful Lisp returns zero"
+               0
+               (cclsh::dispatch-line "(+ 20 22)"))
+  (check-equal "ordinary successful Lisp records zero"
+               0
+               cclsh:*last-status*))
+
+(let ((cclsh:*last-status* 23)
+      (*standard-output* (make-broadcast-stream))
+      (*error-output* (make-broadcast-stream)))
+  (check-equal "same shell status survives Lisp dispatch"
+               23
+               (cclsh::dispatch-line
+                "(cclsh::command-status-record 23)"))
+  (check-equal "same shell status remains recorded"
+               23
+               cclsh:*last-status*))
+
+(let ((cclsh:*last-status* 0)
+      (*standard-output* (make-broadcast-stream))
+      (*error-output* (make-broadcast-stream)))
+  (check-equal "shell status survives later Lisp forms"
+               17
+               (cclsh::dispatch-line
+                "(cclsh::command-status-record 17) (+ 1 1)"))
+  (check-equal "later Lisp forms retain recorded shell status"
+               17
+               cclsh:*last-status*))
+
+(let ((cclsh:*last-status* 0)
+      (*standard-output* (make-broadcast-stream))
+      (*error-output* (make-broadcast-stream)))
+  (check-equal "Lisp error overrides an earlier shell status"
+               1
+               (cclsh::dispatch-line
+                "(progn (cclsh::command-status-record 17) (error \"no\"))"))
+  (check-equal "Lisp error records failure after shell status"
+               1
+               cclsh:*last-status*))
+
+
 ;;;; -- Result --
 
 (cond (*check-failures*

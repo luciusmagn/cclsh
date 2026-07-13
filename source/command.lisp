@@ -8,6 +8,19 @@
 (defvar *last-status* 0
   "Exit status of the last executed command.")
 
+(defvar *lisp-dispatch-status-cell* nil
+  "Dynamically bound while a Lisp input line is evaluated. Shell
+   helpers record their status in the cell so successful Lisp dispatch
+   does not replace it with zero.")
+
+(defun command-status-record (status)
+  "Record STATUS as the last shell status and return it. When called
+   from Lisp dispatch, also preserve STATUS as that dispatch's result."
+  (setf *last-status* status)
+  (when *lisp-dispatch-status-cell*
+    (setf (first *lisp-dispatch-status-cell*) status))
+  status)
+
 (defvar *path-cache* (make-hash-table :test #'equal)
   "Cache of PATH lookups: command name to namestring or NIL.")
 

@@ -47,15 +47,17 @@
 
 (defun dispatch-lisp (line)
   "Evaluate LINE as Lisp forms, print the values REPL style and update
-   the * ** *** variables. Returns an exit status."
+   the * ** *** variables. Returns a shell helper's recorded status,
+   zero after ordinary successful Lisp, or one after an error."
   (handler-case
       (let ((position 0)
-            (eof      (list nil)))
+            (eof      (list nil))
+            (*lisp-dispatch-status-cell* (list nil)))
         (loop
           (multiple-value-bind (form next)
               (read-from-string line nil eof :start position)
             (when (eq form eof)
-              (return 0))
+              (return (or (first *lisp-dispatch-status-cell*) 0)))
             (setf position next)
             (when (dispatch--undefined-function-hint form)
               (return 1))

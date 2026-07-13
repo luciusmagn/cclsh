@@ -562,8 +562,8 @@
     (multiple-value-bind (kind target)
         (command-resolve-fresh name)
       (let ((*job-command-label* (format nil "~{~a~^ ~}" (cons name words))))
-        (setf *last-status*
-              (ecase kind
-                (:builtin  (command-execute-builtin target words))
-                (:external (command-execute-external target words))
-                (:unknown  (error 'command-not-found-error :name name))))))))
+        (command-status-record
+         (ecase kind
+           (:builtin  (command-execute-builtin target words))
+           (:external (command-execute-external target words))
+           (:unknown  (error 'command-not-found-error :name name))))))))
