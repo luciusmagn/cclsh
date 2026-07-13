@@ -37,6 +37,9 @@
 (defconstant +sigcont+ 18
   "Signal number of SIGCONT.")
 
+(defconstant +sigtstp+ 20
+  "Signal number of SIGTSTP.")
+
 (defconstant +sigttin+ 21
   "Signal number of SIGTTIN.")
 
@@ -45,6 +48,11 @@
 
 (defvar *terminal-saved-termios* nil
   "Saved termios bytes, restored after raw line editing.")
+
+(defvar *terminal-shell-attributes* nil
+  "The terminal attributes of an interactive session at startup, the
+   known good state reapplied when a stopped job leaves the terminal
+   in whatever mode it was using.")
 
 (defparameter *ansi-color-codes*
   '((:black          . 30)
@@ -111,6 +119,32 @@
     (setf *terminal-saved-termios* nil))
   (values))
 
+(defun terminal-attributes ()
+  "Snapshot the current terminal attributes. Returns a byte vector for
+   TERMINAL-ATTRIBUTES-APPLY, or NIL when they cannot be read."
+  (ccl:%stack-block ((pointer +termios-size+))
+    (when (terminal--get-termios pointer)
+      (let ((saved (make-array +termios-size+ :element-type '(unsigned-byte 8))))
+        (dotimes (index +termios-size+)
+          (setf (aref saved index) (ccl:%get-unsigned-byte pointer index)))
+        saved))))
+
+(defun terminal-attributes-apply (attributes)
+  "Apply an ATTRIBUTES snapshot taken by TERMINAL-ATTRIBUTES. Does
+   nothing when ATTRIBUTES is NIL."
+  (when attributes
+    (ccl:%stack-block ((pointer +termios-size+))
+      (dotimes (index +termios-size+)
+        (setf (ccl:%get-unsigned-byte pointer index) (aref attributes index)))
+      (terminal--set-termios pointer)))
+  (values))
+
+(defun terminal-shell-attributes-save ()
+  "Remember the startup terminal attributes of an interactive session
+   in *TERMINAL-SHELL-ATTRIBUTES*."
+  (setf *terminal-shell-attributes* (terminal-attributes))
+  (values))
+
 (defun terminal-size ()
   "Return the terminal dimensions as (values rows columns).
    Falls back to 24 by 80 when the size cannot be determined."
@@ -126,26 +160,57 @@
 
 ;;; Foreground process groups
 
+(defun terminal--signal-disposition (signal disposition)
+  "Set the handler of SIGNAL to DISPOSITION: 0 for the default action,
+   1 to ignore it."
+  (external-call "signal" :int signal :address (ccl:%int-to-ptr disposition)
+                 :address)
+  (values))
+
 (defun terminal-signals-setup ()
   "Ignore the terminal stop signals so handing the terminal to child
-   process groups and taking it back never stops the shell."
-  (external-call "signal" :int +sigttou+ :address (ccl:%int-to-ptr 1) :address)
-  (external-call "signal" :int +sigttin+ :address (ccl:%int-to-ptr 1) :address)
+   process groups and taking it back never stops the shell. SIGTSTP
+   keeps its default action: children inherit signal dispositions
+   across exec, and an inherited ignore would make Ctrl-Z dead in
+   every program the shell runs."
+  (terminal--signal-disposition +sigttou+ 1)
+  (terminal--signal-disposition +sigttin+ 1)
   (values))
+
+(defmacro with-child-signal-defaults (&body body)
+  "Run BODY, which spawns a child process, with SIGTTIN and SIGTTOU
+   back at their default dispositions. Children inherit the shell's
+   dispositions across exec, and a child that inherited the shell's
+   ignores could never be stopped by terminal reads the way job
+   control expects. The ignores are restored afterwards so the shell
+   itself survives taking the terminal back from a finished job."
+  `(unwind-protect
+       (progn
+         (terminal--signal-disposition +sigttin+ 0)
+         (terminal--signal-disposition +sigttou+ 0)
+         ,@body)
+     (terminal--signal-disposition +sigttin+ 1)
+     (terminal--signal-disposition +sigttou+ 1)))
 
 (defun terminal-own-process-group ()
   "Return the shell's own process group id."
   (external-call "getpgrp" :int))
 
 (defun terminal-foreground (process-group)
-  "Make PROCESS-GROUP the terminal's foreground process group."
-  (external-call "tcsetpgrp" :int 0 :int process-group :int)
-  (values))
+  "Make PROCESS-GROUP the terminal's foreground process group.
+   Returns true when the terminal accepted the handoff."
+  (zerop (external-call "tcsetpgrp" :int 0 :int process-group :int)))
 
 (defun process-group-continue (process-group)
   "Send SIGCONT to PROCESS-GROUP, unsticking a child that touched the
    terminal in the window before it became the foreground group."
   (external-call "kill" :int (- process-group) :int +sigcont+ :int)
+  (values))
+
+(defun process-group-stop (process-group)
+  "Send SIGTSTP to PROCESS-GROUP, carrying a stop across every process
+   group of a multi-stage job."
+  (external-call "kill" :int (- process-group) :int +sigtstp+ :int)
   (values))
 
 
