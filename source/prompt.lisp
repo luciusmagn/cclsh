@@ -20,7 +20,8 @@
                                      :input  nil
                                      :output output
                                      :error  nil
-                                     :wait   t)))
+                                     :wait   t
+                                     :external-format ':utf-8)))
         (multiple-value-bind (state code)
             (external-process-status process)
           (let ((prompt (get-output-stream-string output)))

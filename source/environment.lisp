@@ -29,7 +29,7 @@
                          (external-call "strerror" :int code :address)))
                    (if (ccl:%null-ptr-p pointer)
                        (format nil "system error ~d" code)
-                       (ccl:%get-cstring pointer)))))))))
+                       (ccl::%get-utf-8-cstring pointer)))))))))
 
 (defvar *environment-lock* (ccl:make-lock "cclsh environment")
   "Serializes libc environment reads and mutations.")

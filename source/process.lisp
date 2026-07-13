@@ -124,7 +124,7 @@ transition.  MONITOR and LOCK are private lifecycle machinery."
   (let ((pointer (external-call "strerror" :int code :address)))
     (if (ccl:%null-ptr-p pointer)
         (format nil "system error ~d" code)
-        (ccl:%get-cstring pointer))))
+        (ccl::%get-utf-8-cstring pointer))))
 
 (defun process--system-error (program operation code)
   "Signal a PROCESS-SPAWN-ERROR for a failed libc operation."

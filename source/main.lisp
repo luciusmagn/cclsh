@@ -16,14 +16,48 @@
   "Git commit the running binary was built from, stamped into the
    image by scripts/build.lisp. NIL in plain REPL sessions.")
 
+(defun terminal--encoding-leaves (&rest roots)
+  "Return the distinct base streams below composite stream ROOTS."
+  (let ((pending (copy-list roots))
+        (seen nil)
+        (leaves nil))
+    (loop while pending
+          for stream = (pop pending)
+          unless (member stream seen :test #'eq)
+            do (push stream seen)
+               (cond ((typep stream 'synonym-stream)
+                      (push (symbol-value (synonym-stream-symbol stream))
+                            pending))
+                     ((typep stream 'two-way-stream)
+                      (push (two-way-stream-input-stream stream) pending)
+                      (push (two-way-stream-output-stream stream) pending))
+                     ((typep stream 'echo-stream)
+                      (push (echo-stream-input-stream stream) pending)
+                      (push (echo-stream-output-stream stream) pending))
+                     ((typep stream 'broadcast-stream)
+                      (setf pending
+                            (append (broadcast-stream-streams stream)
+                                    pending)))
+                     ((typep stream 'concatenated-stream)
+                      (setf pending
+                            (append (concatenated-stream-streams stream)
+                                    pending)))
+                     (t
+                      (push stream leaves))))
+    (nreverse leaves)))
+
 (defun terminal-encoding-setup ()
-  "Switch the terminal streams to UTF-8."
+  "Make UTF-8 the default and switch every terminal stream to it."
+  (setf ccl:*default-file-character-encoding* ':utf-8
+        ccl:*default-external-format*
+        '(:character-encoding :utf-8 :line-termination :unix)
+        ccl:*terminal-character-encoding-name* ':utf-8)
   (let ((format (make-external-format :character-encoding ':utf-8
                                       :line-termination   ':unix)))
-    (dolist (stream (list *terminal-io* *standard-input*
-                          *standard-output* *error-output*))
-      (ignore-errors
-        (setf (stream-external-format stream) format))))
+    (dolist (stream (terminal--encoding-leaves
+                     *terminal-io* *standard-input*
+                     *standard-output* *error-output*))
+      (setf (stream-external-format stream) format)))
   (values))
 
 (defun environment-setup ()
@@ -44,7 +78,7 @@
   (let ((file (startup-file)))
     (when (probe-file file)
       (handler-case
-          (load file :verbose nil)
+          (load file :verbose nil :external-format ':utf-8)
         (serious-condition (condition)
           (dispatch-report-error condition)))))
   (values))
@@ -183,7 +217,9 @@
   (environment-setup)
   (let ((*package* (find-package '#:cclsh-user)))
     (handler-case
-        (with-open-file (stream path :direction :input)
+        (with-open-file (stream path
+                                :direction :input
+                                :external-format ':utf-8)
           (let ((*standard-input* stream))
             (loop
               (multiple-value-bind (line kind)

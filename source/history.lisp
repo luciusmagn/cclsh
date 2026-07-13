@@ -47,7 +47,8 @@
     (handler-case
         (with-open-file (stream (history-file)
                                 :direction :input
-                                :if-does-not-exist nil)
+                                :if-does-not-exist nil
+                                :external-format ':utf-8)
           (when stream
             (let ((*read-eval* nil))
               (loop for entry = (read stream nil ':cclsh-eof)
@@ -77,7 +78,8 @@
             (with-open-file (stream (history-file)
                                     :direction :output
                                     :if-exists :append
-                                    :if-does-not-exist :create)
+                                    :if-does-not-exist :create
+                                    :external-format ':utf-8)
               (prin1 entry stream)
               (terpri stream)))
         (error () nil))))

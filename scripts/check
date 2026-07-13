@@ -8,9 +8,11 @@ if [ -z "${ASDF_OUTPUT_TRANSLATIONS:-}" ]; then
     export ASDF_OUTPUT_TRANSLATIONS
 fi
 
-exec ccl -n -b -e \
+exec ccl -n -b \
+    -e '(setf ccl:*default-file-character-encoding* :utf-8)' \
+    -e \
     '(handler-case
-         (load "tests/check.lisp")
+         (load "tests/check.lisp" :external-format :utf-8)
        (serious-condition (condition)
          (format *error-output* "cclsh check loader failed: ~a~%" condition)
          (ccl:quit 1)))'

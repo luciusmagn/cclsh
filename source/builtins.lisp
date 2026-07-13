@@ -130,7 +130,7 @@
     (cond ((find-package '#:quicklisp)
            t)
           ((probe-file setup)
-           (load setup :verbose nil)
+           (load setup :verbose nil :external-format ':utf-8)
            t)
           (t
            (let ((bootstrap (concatenate 'string (config-directory)
@@ -138,6 +138,6 @@
              (ensure-directories-exist (config-directory))
              (when (zerop (run "curl" "-fsSL" "-o" bootstrap
                                "https://beta.quicklisp.org/quicklisp.lisp"))
-               (load bootstrap :verbose nil)
+               (load bootstrap :verbose nil :external-format ':utf-8)
                (funcall (find-symbol "INSTALL" '#:quicklisp-quickstart))
                t))))))
