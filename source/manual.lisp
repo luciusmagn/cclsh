@@ -208,9 +208,11 @@ Lisp symbols in Lisp mode or inside a substitution:
   (princ-to<Tab>           (princ-to-string
   echo (*bal<Tab>          echo (*balls*
 
-Unique matches insert, several extend to the common prefix, Tab again
-lists the candidates. The newest history entry beginning with the
-current input appears in dim text; Right or C-f at the end accepts it.
+Unique matches insert and several extend to the common prefix. Tab again
+opens a candidate grid: arrows navigate, Tab cycles, Escape restores the
+prefix, and typing keeps the selected candidate before inserting. The newest
+history entry beginning with the current input appears in dim text; Right or
+C-f at the end accepts it.
 
   Left/Right C-b/C-f   move/accept   Ctrl-arrows move by word
   Up/Down C-p/C-n      history       C-w/C-h     kill word

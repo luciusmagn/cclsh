@@ -24,4 +24,5 @@
    :completion-function #'complete-line
    :common-prefix-function #'completion--common-prefix
    :completion-accept-function #'line-editor--accept-completion
+   :completion-arrangement :grid
    :suggestion-function #'history-suggestion))

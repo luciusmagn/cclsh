@@ -356,8 +356,10 @@ Tab completes command names in command position (=PATH= executables
 plus defined commands), file paths elsewhere (directories complete
 with a trailing =/=, spaces get escaped), and Lisp symbols in Lisp
 mode, including =:keywords=. A unique match inserts itself, several
-matches extend to their common prefix, and pressing Tab again lists
-the candidates.
+matches extend to their common prefix, and pressing Tab again opens a
+width-measured candidate grid. Arrow keys navigate the grid and Tab cycles
+candidates. Escape restores the original prefix. Other input keeps the
+selected candidate before applying that input.
 
 The newest history entry beginning with the current input appears in
 dim text after the cursor. Press Right or C-f at the end of the input
