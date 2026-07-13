@@ -52,6 +52,10 @@ This produces a standalone =cclsh= binary in the repository root via
 - External commands run as the terminal's foreground process group, so
   interactive programs work and Ctrl-C reaches the child, not the
   shell. Errors and Ctrl-C never drop you into the CCL debugger.
+- Job control: =command &= starts a background job, Ctrl-Z stops the
+  foreground command or pipeline, =jobs=, =fg= and =bg= manage them,
+  and finished background jobs are announced before the next prompt.
+  =exit= warns once about stopped jobs.
 - =cclsh -c command=, script files and shebang scripts run without
   user state, which keeps ssh, scp, rsync and git working when cclsh
   is a login shell. =CCLSH_SAFE=1= skips startup.lisp and history.
@@ -100,7 +104,6 @@ long form, including login shell setup.
 
 * Not yet
 
-Job control (bg/fg/C-z), => < >>= characters in command mode (use the
-Lisp redirection stages), script argv, and a right-side prompt.
-Multi-line history entries are recalled with newlines folded to
-spaces.
+=> < >>= characters in command mode (use the Lisp redirection
+stages), script argv, and a right-side prompt. Multi-line history
+entries are recalled with newlines folded to spaces.

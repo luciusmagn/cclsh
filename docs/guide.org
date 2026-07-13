@@ -257,6 +257,46 @@ Each returns the deciding exit status and records it in
 =*last-status*=. Builtin commands can appear inside =pipe= as well;
 their output is buffered and streamed to the next stage.
 
+* Job control
+
+A trailing =&= launches an external command as a background job,
+Ctrl-Z stops the foreground command or pipeline, and =jobs=, =fg= and
+=bg= inspect and resume what the job table holds:
+
+#+begin_src sh
+sleep 300 &            # [1] 12345
+make build             # ... Ctrl-Z
+                       # [2]+  Stopped                 make build
+jobs                   # lists both, + marks the current job
+bg %2                  # make continues in the background
+fg                     # brings the current job back to the terminal
+#+end_src
+
+Job specs work like sh: =%1= or plain =1= by id, =%+=, =%%= or === for
+the current job, =%-= for the previous one, and =%text= for the most
+recent job whose command starts with =text=. Without an argument =fg=
+and =bg= act on the current job, the one =jobs= marks with =+=.
+=jobs -l= adds process group ids, which is what =kill= wants: =kill
+-TERM -12345= ends a whole job. The builtins are ordinary functions
+too, so =(fg 1)= and =(jobs)= work from Lisp.
+
+Details worth knowing:
+
+- Finished background jobs are announced before the next prompt as
+  =Done=, =Exit 2= or the signal that ended them.
+- A stopped job remembers the terminal modes it was using and gets
+  them back under =fg=, so stopping =vim=, running other commands and
+  resuming works.
+- Every pipeline stage runs in its own process group, so a stop is
+  carried across all stages and =fg= and =bg= continue them all.
+- A =capture= cannot stop, because the shell itself is reading its
+  output: Ctrl-Z prints a notice and the capture keeps running.
+- =exit= and Ctrl-D warn once when stopped jobs would be left behind;
+  repeating the exit leaves anyway, and the kernel then sends the
+  orphaned stopped jobs the usual SIGHUP and SIGCONT.
+- Backgrounding is for external commands: builtins and Lisp forms
+  have no separate process, so =&= reports an error for them.
+
 * Line editing and completion
 
 | Key                 | Action                              |
@@ -417,9 +457,9 @@ config change) restores fish, and a root TTY login works regardless.
 
 * Current limitations
 
-- No job control: no =bg=, =fg= or =jobs=, and Ctrl-Z will stop the
-  foreground child with no way to resume it from the shell (use
-  =kill -CONT= from elsewhere).
+- Ctrl-Z stops external commands and pipelines, not builtins or Lisp
+  evaluation: those run inside the shell process itself, and stopping
+  a busy Lisp form with Ctrl-Z stops the whole shell.
 - No => < >>= characters in command mode; redirection is Lisp:
   =(to ...)=, =(append-to ...)=, =(from ...)=, =(error-to ...)=,
   =(merge-error)= and =(capture ...)=.

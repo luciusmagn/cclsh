@@ -117,9 +117,9 @@ An integer return value becomes the exit status, anything else means
   (run 'git \"log\" \"-1\")    symbols work too
   (cmd git \"diff\" file)    macro, head resolves like a command word
 
-Builtins: cd (with -), exit, export, unset, rehash, commands, help.
-quicklisp-setup loads or installs Quicklisp. commands lists everything
-currently defined.")
+Builtins: cd (with -), exit, export, unset, rehash, commands, help,
+jobs, fg, bg. quicklisp-setup loads or installs Quicklisp. commands
+lists everything currently defined.")
 
     ("pipelines" "pipe, seq, all and any"
      "Process orchestration is spelled in Lisp. A stage is (name
@@ -154,7 +154,32 @@ Error redirection applies to every stage, builtins included, and
 merge-error sends standard error wherever the ordinary output goes.
 Each pipeline returns the deciding exit status and records
 *last-status*. The first stage owns the terminal, so Ctrl-C interrupts
-the pipeline from its head.")
+the pipeline from its head, and Ctrl-Z stops the whole pipeline as
+one job, see jobs.")
+
+    ("jobs" "background jobs, fg, bg and Ctrl-Z"
+     "Background and stopped commands are jobs:
+
+  sleep 300 &              background job, prints [1] 12345
+  make build               then Ctrl-Z stops it:
+                           [2]+  Stopped                 make build
+  jobs                     list jobs: + current, - previous;
+                           jobs -l adds process group ids
+  fg                       resume the current job in the foreground
+  bg %2                    resume a stopped job in the background
+  fg %ma                   specs: %2, 2, %+, %-, %prefix
+
+Finished background jobs are announced before the next prompt as
+Done, Exit 2 or the ending signal. fg restores the terminal modes a
+stopped job was using, so Ctrl-Z out of vim and back just works.
+Ctrl-Z stops a whole pipeline as one job; a capture continues through
+Ctrl-Z with a notice, since the shell itself is reading its output.
+
+Builtins and Lisp forms run inside the shell process: & reports an
+error for them, and Ctrl-Z during a busy Lisp evaluation stops the
+shell itself, so avoid that one. exit with stopped jobs warns once,
+exit again to leave anyway. jobs, fg and bg are ordinary functions
+too: (fg 1) resumes job 1 from Lisp.")
 
     ("editing" "keys, completion and colors"
      "Tab completes command names in command position, file paths
@@ -262,9 +287,7 @@ PATH at the top of startup.lisp:
 
 Keep root on a stock shell. Emergency access past broken user state:
 
-  ssh host -t env CCLSH_SAFE=1 /home/mag/.local/bin/cclsh
-
-No job control yet, so avoid Ctrl-Z."))
+  ssh host -t env CCLSH_SAFE=1 /home/mag/.local/bin/cclsh"))
   "The built-in manual: (name one-liner body) per section.")
 
 (defun manual--heading (text)
