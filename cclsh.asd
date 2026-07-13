@@ -10,7 +10,7 @@
                  (:file "terminal" :depends-on ("package"))
                  (:file "process" :depends-on ("package" "environment"))
                  (:file "lexer"    :depends-on ("package"))
-                 (:file "command"  :depends-on ("package" "environment"))
+                 (:file "command"  :depends-on ("package" "environment" "lexer"))
                  (:file "jobs"     :depends-on ("command" "terminal" "process"))
                  (:file "expand"   :depends-on ("lexer" "command" "environment"))
                  (:file "highlight" :depends-on ("terminal" "lexer" "command" "expand"))
