@@ -4,6 +4,16 @@
 # executable even if a build is interrupted.
 set -e
 cd "$(dirname "$0")/.."
-ccl -n -b -l scripts/build.lisp
+rm -f cclsh.new
+ccl -n -b -e \
+    '(handler-case
+         (load "scripts/build.lisp")
+       (serious-condition (condition)
+         (format *error-output* "cclsh build loader failed: ~a~%" condition)
+         (ccl:quit 1)))'
+if [ ! -x cclsh.new ]; then
+    echo "cclsh build: cclsh.new was not created" >&2
+    exit 1
+fi
 mv -f cclsh.new cclsh
 echo "Built ./cclsh"

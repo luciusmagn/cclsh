@@ -8,4 +8,9 @@ if [ -z "${ASDF_OUTPUT_TRANSLATIONS:-}" ]; then
     export ASDF_OUTPUT_TRANSLATIONS
 fi
 
-ccl -n -b -l tests/check.lisp
+exec ccl -n -b -e \
+    '(handler-case
+         (load "tests/check.lisp")
+       (serious-condition (condition)
+         (format *error-output* "cclsh check loader failed: ~a~%" condition)
+         (ccl:quit 1)))'
