@@ -266,17 +266,43 @@
   (force-output *error-output*)
   (+ 128 +sigtstp+))
 
-(defun job--wait (job interactive)
-  "Poll JOB until it completes, or until it stops when INTERACTIVE.
-   Returns the exit status, or :STOPPED for a stop."
-  (loop
-    (case (job-refresh job)
-      (:done
-       (return (job-exit-status job)))
-      (:stopped
-       (when interactive
-         (return ':stopped))))
-    (sleep 0.005)))
+(defun job-wait-attended (job &key (on-stop ':suspend))
+  "Poll JOB, which already owns the terminal, until it completes.
+   Interactive sessions handle a stop per ON-STOP: :SUSPEND makes the
+   wait return so the caller can book the job into the table, and
+   :CONTINUE resumes the job at once with a one-time notice, for
+   pipelines whose output the shell itself is collecting.
+   Non-interactive sessions always wait through stops. Returns
+   (values status stopped) where STATUS is the exit status of the
+   job's last process, or the stop status 148."
+  (let ((interactive (terminal-tty-p))
+        (noticed     nil))
+    (loop
+      (case (job-refresh job)
+        (:done
+         (return (values (job-exit-status job) nil)))
+        (:stopped
+         (cond ((not interactive)
+                nil)
+               ((eq on-stop ':continue)
+                (unless noticed
+                  (setf noticed t)
+                  (format *error-output*
+                          "cclsh: cannot suspend a capture; continuing~%")
+                  (force-output *error-output*))
+                (job--continue-processes job))
+               (t
+                (return (values (+ 128 +sigtstp+) t))))))
+      (sleep 0.005))))
+
+(defun job--live-head-group (job)
+  "Process group of the first process of JOB that still lives, the
+   group a foreground handoff should target. NIL once every process
+   has finished."
+  (let ((live (find-if-not (lambda (process)
+                             (eq (process-live-state process) ':done))
+                           (job-processes job))))
+    (and live (external-process-id live))))
 
 (defun job-run-foreground (job &key continue)
   "Run JOB as the terminal's foreground job until it finishes or, on
@@ -286,8 +312,9 @@
    job stopped and returned to the table."
   (let ((interactive (terminal-tty-p))
         (shell-group (terminal-own-process-group))
-        (head-group  (external-process-id (first (job-processes job))))
-        (outcome     nil))
+        (head-group  (job--live-head-group job))
+        (status      nil)
+        (stopped     nil))
     (unwind-protect
         (progn
           (when (and interactive head-group)
@@ -297,15 +324,16 @@
             (if continue
                 (job--continue-processes job)
                 (process-group-continue head-group)))
-          (setf outcome (job--wait job interactive)))
+          (multiple-value-setq (status stopped)
+            (job-wait-attended job)))
       (when interactive
         (terminal-foreground shell-group)))
-    (cond ((eq outcome ':stopped)
+    (cond (stopped
            (job--suspend job))
           (t
            (when (job-id job)
              (job-unregister job))
-           outcome))))
+           status))))
 
 
 ;;; Spawning

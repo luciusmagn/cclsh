@@ -117,7 +117,8 @@
                      (command-resolve-fresh name)
                    (when (eq kind ':unknown)
                      (error 'command-not-found-error :name name))
-                   (list kind target arguments)))))))
+                   (list kind target arguments
+                         (format nil "~{~a~^ ~}" (cons name arguments)))))))))
 
 (defun pipeline--split-redirects (resolved)
   "Strip and validate redirect stages. Returns (values commands
@@ -216,16 +217,17 @@
    standard error into the ordinary output, or :STREAM to expose the
    process error stream for the caller's collector. Returns (values
    process output-stream)."
-  (let ((process (run-program target
-                              (mapcar #'pipeline--string-encode arguments)
-                              :input           (if input ':stream t)
-                              :output          (if last-stage-p t ':stream)
-                              :error           (case error-mode
-                                                 ((nil)    t)
-                                                 (:output  ':output)
-                                                 (:stream  ':stream))
-                              :wait            nil
-                              :external-format *pipe-external-format*)))
+  (let ((process (with-child-signal-defaults
+                   (run-program target
+                                (mapcar #'pipeline--string-encode arguments)
+                                :input           (if input ':stream t)
+                                :output          (if last-stage-p t ':stream)
+                                :error           (case error-mode
+                                                   ((nil)    t)
+                                                   (:output  ':output)
+                                                   (:stream  ':stream))
+                                :wait            nil
+                                :external-format *pipe-external-format*))))
     (when input
       (pipeline--copy-stream input (external-process-input-stream process)))
     (values process
@@ -277,7 +279,10 @@
 (defun pipeline--execute (resolved capture)
   "Run RESOLVED stages: redirect stages feed or receive files, error
    redirects apply to every stage, and with CAPTURE the final output
-   is collected instead of written to the terminal. Returns (values
+   is collected instead of written to the terminal. An interactive
+   pipeline stops as one job under Ctrl-Z and its files stay open for
+   the resumed job; a capture continues through stops with a notice
+   because the shell itself consumes its output. Returns (values
    status captured-string)."
   (multiple-value-bind (commands input-path output-path append
                         error-path error-append merge-error)
@@ -285,20 +290,26 @@
     (when (and capture output-path)
       (error 'pipeline-syntax-error
              :message "capture cannot combine with to or append-to"))
-    (let ((interactive     (terminal-tty-p))
-          (shell-group     (terminal-own-process-group))
-          (redirected      (or output-path capture))
-          (opened-input    nil)
-          (sink            nil)
-          (error-sink      nil)
-          (error-semaphore (ccl:make-semaphore))
-          (error-copiers   0)
-          (captured        nil)
-          (processes       nil)
-          (status          0)
-          (carried         nil)
-          (stage-index     0)
-          (foreground-p    nil))
+    (let ((interactive       (terminal-tty-p))
+          (shell-group       (terminal-own-process-group))
+          (redirected        (or output-path capture))
+          (opened-input      nil)
+          (input-handed      nil)
+          (sink              nil)
+          (sink-semaphore    nil)
+          (error-sink        nil)
+          (error-semaphore   (ccl:make-semaphore))
+          (error-copiers     0)
+          (capture-collector nil)
+          (capture-semaphore nil)
+          (captured          nil)
+          (processes         nil)
+          (job               nil)
+          (stopped           nil)
+          (status            0)
+          (carried           nil)
+          (stage-index       0)
+          (foreground-p      nil))
       (unwind-protect
           (progn
             (when input-path
@@ -324,6 +335,8 @@
                                           (not redirected))
                   do (ecase kind
                        (:external
+                        (when (and opened-input (eq carried opened-input))
+                          (setf input-handed t))
                         (multiple-value-bind (process output)
                             (pipeline--spawn-external
                              target arguments carried last-stage-p
@@ -352,10 +365,12 @@
                      (incf stage-index))
             (when redirected
               (cond (capture
-                     (setf captured
-                           (with-output-to-string (collected)
-                             (when carried
-                               (pipeline--copy-inline carried collected)))))
+                     (setf capture-collector (make-string-output-stream))
+                     (setf capture-semaphore (ccl:make-semaphore))
+                     (if carried
+                         (pipeline--copy-signaled carried capture-collector
+                                                  capture-semaphore)
+                         (ccl:signal-semaphore capture-semaphore)))
                     (t
                      (setf sink
                            (open output-path
@@ -364,25 +379,62 @@
                                                         ':append
                                                         ':supersede)
                                  :if-does-not-exist :create
+                                 :sharing           ':lock
                                  :external-format   *pipe-external-format*))
                      (when carried
-                       (pipeline--copy-inline carried sink)))))
-            (let ((exit-statuses (mapcar #'external-wait
-                                         (nreverse processes))))
-              (when (and exit-statuses
-                         (eq (first (first (last commands))) ':external))
-                (setf status (first (last exit-statuses)))))
-            (dotimes (copier error-copiers)
-              (declare (ignorable copier))
-              (ccl:wait-on-semaphore error-semaphore)))
+                       (setf sink-semaphore (ccl:make-semaphore))
+                       (pipeline--copy-signaled carried sink
+                                                sink-semaphore)))))
+            (when processes
+              (setf job (job-make :processes (nreverse processes)
+                                  :command   (format nil "~{~a~^ | ~}"
+                                                     (mapcar #'fourth
+                                                             commands))))
+              (let ((builtin-status status))
+                (multiple-value-setq (status stopped)
+                  (job-wait-attended job :on-stop (if capture
+                                                      ':continue
+                                                      ':suspend)))
+                (unless (or stopped
+                            (eq (first (first (last commands))) ':external))
+                  (setf status builtin-status))))
+            (unless stopped
+              (when capture-semaphore
+                (ccl:wait-on-semaphore capture-semaphore)
+                (setf captured
+                      (get-output-stream-string capture-collector)))
+              (when sink-semaphore
+                (ccl:wait-on-semaphore sink-semaphore))
+              (dotimes (copier error-copiers)
+                (declare (ignorable copier))
+                (ccl:wait-on-semaphore error-semaphore))))
         (when foreground-p
           (terminal-foreground shell-group))
-        (when sink
-          (ignore-errors (close sink)))
-        (when error-sink
-          (ignore-errors (close error-sink)))
-        (when opened-input
-          (ignore-errors (close opened-input))))
+        (cond (stopped
+               ;; The stopped job keeps using the pipeline plumbing;
+               ;; closing it here would truncate the resumed job, so
+               ;; ownership moves to the job's completion cleanups.
+               (when (and opened-input (not input-handed))
+                 (ignore-errors (close opened-input)))
+               (setf (job-cleanups job)
+                     (list (lambda ()
+                             (when sink-semaphore
+                               (ccl:wait-on-semaphore sink-semaphore))
+                             (when sink
+                               (ignore-errors (close sink)))
+                             (dotimes (copier error-copiers)
+                               (declare (ignorable copier))
+                               (ccl:wait-on-semaphore error-semaphore))
+                             (when error-sink
+                               (ignore-errors (close error-sink))))))
+               (setf status (job--suspend job)))
+              (t
+               (when sink
+                 (ignore-errors (close sink)))
+               (when error-sink
+                 (ignore-errors (close error-sink)))
+               (when opened-input
+                 (ignore-errors (close opened-input))))))
       (setf *last-status* status)
       (values status
               (and captured
@@ -410,11 +462,16 @@
     (loop for (name . arguments) in stages
           do (multiple-value-bind (kind target)
                  (command-resolve-fresh name)
-               (setf status
-                     (ecase kind
-                       (:builtin  (command-execute-builtin target arguments))
-                       (:external (command-execute-external target arguments))
-                       (:unknown  (error 'command-not-found-error :name name))))
+               (let ((*job-command-label*
+                       (format nil "~{~a~^ ~}" (cons name arguments))))
+                 (setf status
+                       (ecase kind
+                         (:builtin  (command-execute-builtin target
+                                                             arguments))
+                         (:external (command-execute-external target
+                                                              arguments))
+                         (:unknown  (error 'command-not-found-error
+                                           :name name)))))
                (setf *last-status* status)
                (case mode
                  (:while-successful
