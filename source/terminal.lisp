@@ -10,9 +10,6 @@
 
 (in-package #:cclsh)
 
-(defconstant +escape-character+ (code-char 27)
-  "The ASCII escape character used in ANSI sequences.")
-
 (defconstant +termios-size+ 128
   "Buffer size comfortably larger than glibc's struct termios.")
 
@@ -54,9 +51,6 @@
 
 (defconstant +terminal-eperm+ 1
   "Linux errno used when a process group has left the session.")
-
-(defconstant +terminal-lc-ctype-mask+ 1
-  "Glibc newlocale mask selecting the LC_CTYPE category.")
 
 (define-condition terminal-control-error (error)
   ((operation
@@ -110,33 +104,6 @@
    known good state reapplied when a stopped job leaves the terminal
    in whatever mode it was using.")
 
-(defvar *terminal-presentation-enabled* t
-  "Whether output may contain terminal presentation sequences.
-   Dynamically bind this to NIL while capturing or redirecting output.")
-
-(defvar *terminal-cell-locale-active* nil
-  "True while the current Lisp thread has a UTF-8 locale for wcwidth.")
-
-(defparameter *ansi-color-codes*
-  '((:black          . 30)
-    (:red            . 31)
-    (:green          . 32)
-    (:yellow         . 33)
-    (:blue           . 34)
-    (:magenta        . 35)
-    (:cyan           . 36)
-    (:white          . 37)
-    (:bright-black   . 90)
-    (:bright-red     . 91)
-    (:bright-green   . 92)
-    (:bright-yellow  . 93)
-    (:bright-blue    . 94)
-    (:bright-magenta . 95)
-    (:bright-cyan    . 96)
-    (:bright-white   . 97))
-  "Mapping from color keywords to standard SGR color codes.")
-
-
 ;;; Raw mode
 
 (defun terminal-tty-p ()
@@ -145,7 +112,7 @@
 
 (defun terminal-output-tty-p ()
   "True when terminal presentation is enabled and output is a terminal."
-  (and *terminal-presentation-enabled*
+  (and *presentation-enabled*
        (= 1 (external-call "isatty" :int 1 :int))))
 
 (defun terminal--get-termios (pointer)
@@ -335,279 +302,12 @@
   (external-call "kill" :int (- process-group) :int +sigtstp+ :int)
   (values))
 
-
-;;; Unicode terminal geometry
-
-(defun terminal--make-cell-locale ()
-  "Create a private UTF-8 LC_CTYPE locale for terminal width queries.
-   Return a null pointer only when none of the conventional Linux locale
-   names is available. The locale is never retained in a saved image."
-  (dolist (name '("C.UTF-8" "C.utf8" "en_US.UTF-8" "")
-                (ccl:%null-ptr))
-    (ccl::with-utf-8-cstr (encoded name)
-      (let ((locale
-              (external-call "newlocale"
-                             :int +terminal-lc-ctype-mask+
-                             :address encoded
-                             :address (ccl:%null-ptr)
-                             :address)))
-        (unless (ccl:%null-ptr-p locale)
-          (return locale))))))
-
-(defun terminal--call-with-cell-locale (function)
-  "Call FUNCTION with wcwidth using a thread-local UTF-8 locale.
-
-   Glibc's uselocale changes only the calling native thread. A fresh locale
-   is freed before returning, so no foreign pointer survives image saving.
-   Nested calls reuse the established dynamic extent."
-  (if *terminal-cell-locale-active*
-      (funcall function)
-      (let ((locale (terminal--make-cell-locale)))
-        (if (ccl:%null-ptr-p locale)
-            (funcall function)
-            (let ((previous
-                    (external-call "uselocale"
-                                   :address locale
-                                   :address)))
-              (unwind-protect
-                  (if (ccl:%null-ptr-p previous)
-                      (funcall function)
-                      (let ((*terminal-cell-locale-active* t))
-                        (funcall function)))
-                (unless (ccl:%null-ptr-p previous)
-                  (external-call "uselocale"
-                                 :address previous
-                                 :address))
-                (external-call "freelocale"
-                               :address locale
-                               :void)))))))
-
-(defun terminal--wide-code-p (code)
-  "True when CODE is in a broadly stable Unicode wide-character range.
-   This is the fallback used only if libc cannot classify a character."
-  (or (<= #x1100 code #x115f)
-      (= code #x2329)
-      (= code #x232a)
-      (and (<= #x2e80 code #xa4cf) (/= code #x303f))
-      (<= #xac00 code #xd7a3)
-      (<= #xf900 code #xfaff)
-      (<= #xfe10 code #xfe19)
-      (<= #xfe30 code #xfe6f)
-      (<= #xff00 code #xff60)
-      (<= #xffe0 code #xffe6)
-      (<= #x1f300 code #x1faff)
-      (<= #x20000 code #x3fffd)))
-
-(defun terminal--zero-width-code-p (code)
-  "True when CODE is a control or Unicode formatting code with no cells."
-  (or (< code 32)
-      (<= 127 code 159)
-      (= code #x200b)
-      (<= #x200c code #x200f)
-      (<= #x202a code #x202e)
-      (<= #x2060 code #x206f)
-      (<= #xfe00 code #xfe0f)
-      (= code #xfeff)
-      (<= #xe0000 code #xeffff)))
-
-(defun terminal--character-cell-width (character)
-  "Return CHARACTER's terminal cell width under an active cell locale."
-  (let* ((code   (char-code character))
-         (width  (external-call "wcwidth"
-                                :unsigned-int code
-                                :int)))
-    (cond ((not (minusp width))
-           width)
-          ((terminal--zero-width-code-p code)
-           0)
-          ((ccl::is-combinable character)
-           0)
-          ((terminal--wide-code-p code)
-           2)
-          (t
-           1))))
-
-(defun terminal-character-cell-width (character)
-  "Return the number of terminal cells occupied by CHARACTER.
-   Controls, combining marks and formatting characters occupy zero cells;
-   East Asian wide characters and emoji occupy two."
-  (terminal--call-with-cell-locale
-   (lambda ()
-     (terminal--character-cell-width character))))
-
-(defun terminal--regional-indicator-p (character)
-  "True when CHARACTER is a regional-indicator flag component."
-  (<= #x1f1e6 (char-code character) #x1f1ff))
-
-(defun terminal--emoji-modifier-p (character)
-  "True when CHARACTER is an emoji skin-tone modifier."
-  (<= #x1f3fb (char-code character) #x1f3ff))
-
-(defun terminal--variation-selector-16-p (character)
-  "True when CHARACTER requests emoji presentation."
-  (= (char-code character) #xfe0f))
-
-(defun terminal--zero-width-joiner-p (character)
-  "True when CHARACTER joins adjacent emoji or script glyphs."
-  (= (char-code character) #x200d))
-
-(defun terminal--grapheme-control-p (character)
-  "True when CHARACTER is a C0 or C1 grapheme-breaking control."
-  (let ((code (char-code character)))
-    (or (< code 32) (<= 127 code 159))))
-
-(defun terminal--grapheme-extend-p (character)
-  "True when CHARACTER remains attached to the preceding grapheme.
-
-   wcwidth covers Unicode nonspacing marks, variation selectors, Hangul
-   medial and final jamo, and tag characters. CCL's normalization table
-   additionally recognizes spacing combining marks in its supported data."
-  (and (not (terminal--zero-width-joiner-p character))
-       (not (terminal--grapheme-control-p character))
-       (or (zerop (terminal--character-cell-width character))
-           (ccl::is-combinable character)
-           (terminal--emoji-modifier-p character))))
-
-(defun terminal-grapheme-next-boundary
-    (string start &optional (end (length string)))
-  "Return the first extended-grapheme boundary after START, no later than END.
-   Combining characters, emoji modifiers, regional-indicator pairs and
-   zero-width-joiner sequences remain indivisible."
-  (when (>= start end)
-    (return-from terminal-grapheme-next-boundary end))
-  (terminal--call-with-cell-locale
-   (lambda ()
-     (let* ((first (char string start))
-            (index (1+ start)))
-       (cond ((and (char= first #\return)
-                   (< index end)
-                   (char= (char string index) #\newline))
-              (1+ index))
-             ((terminal--regional-indicator-p first)
-              (if (and (< index end)
-                       (terminal--regional-indicator-p (char string index)))
-                  (1+ index)
-                  index))
-             (t
-              (loop
-                (loop while (and (< index end)
-                                 (terminal--grapheme-extend-p
-                                  (char string index)))
-                      do (incf index))
-                (cond ((and (< index end)
-                            (terminal--zero-width-joiner-p
-                             (char string index)))
-                       ;; GB9 keeps the joiner with the preceding cluster.
-                       ;; When another character follows, GB11 keeps that
-                       ;; character in the same joined glyph as well.
-                       (incf index)
-                       (when (< index end)
-                         (incf index)))
-                      (t
-                       (return index))))))))))
-
-(defun terminal-grapheme-previous-boundary (string index)
-  "Return the extended-grapheme boundary immediately before INDEX.
-   INDEX may itself be inside a grapheme; in that case return its start."
-  (setf index (min index (length string)))
-  (when (<= index 0)
-    (return-from terminal-grapheme-previous-boundary 0))
-  (terminal--call-with-cell-locale
-   (lambda ()
-     (loop with start = 0
-           for next = (terminal-grapheme-next-boundary string start)
-           when (>= next index)
-             return start
-           do (setf start next)))))
-
-(defun terminal-grapheme-boundary-at-or-after (string index)
-  "Return the first extended-grapheme boundary at or after INDEX."
-  (when (<= index 0)
-    (return-from terminal-grapheme-boundary-at-or-after 0))
-  (terminal--call-with-cell-locale
-   (lambda ()
-     (loop with boundary = 0
-           while (< boundary (length string))
-           do (setf boundary
-                    (terminal-grapheme-next-boundary string boundary))
-           when (>= boundary index)
-             return boundary
-           finally (return (length string))))))
-
-(defun terminal-grapheme-cell-width (string start end)
-  "Return the terminal cell width of one grapheme in STRING from START to END.
-
-   Libc supplies codepoint widths. Emoji presentation selectors and keycaps
-   promote a cluster to two cells; skin-tone modifiers and joined emoji do
-   not add cells of their own."
-  (terminal--call-with-cell-locale
-   (lambda ()
-     (let ((total              0)
-           (widest             0)
-           (joiner-p           nil)
-           (emoji-presentation nil)
-           (keycap-p           nil))
-       (loop for index from start below end
-             for character = (char string index)
-             for code = (char-code character)
-             for width = (terminal--character-cell-width character)
-             do (setf widest (max widest width))
-                (cond ((terminal--zero-width-joiner-p character)
-                       (setf joiner-p t))
-                      ((and (> index start)
-                            (terminal--emoji-modifier-p character))
-                       nil)
-                      (t
-                       (incf total width)))
-                (when (terminal--variation-selector-16-p character)
-                  (setf emoji-presentation t))
-                (when (= code #x20e3)
-                  (setf keycap-p t)))
-       (cond ((or keycap-p
-                  (and emoji-presentation (> end (1+ start))))
-              2)
-             (joiner-p
-              widest)
-             (t
-              total))))))
-
-(defun terminal-text-cell-width (string)
-  "Return the terminal cells occupied by plain Unicode STRING.
-   Newlines, returns and other controls occupy no horizontal cells."
-  (terminal--call-with-cell-locale
-   (lambda ()
-     (loop with index = 0
-           while (< index (length string))
-           for next = (terminal-grapheme-next-boundary string index)
-           sum (terminal-grapheme-cell-width string index next)
-           do (setf index next)))))
-
-
-;;; ANSI sequences
-
-(defun ansi-color-code (color)
-  "Return the SGR code for the COLOR keyword, defaulting to white."
-  (or (rest (assoc color *ansi-color-codes*)) 37))
-
-(defun ansi-colorize (text color &key bold)
-  "Wrap TEXT in the SGR sequence for COLOR, optionally BOLD.
-   Return TEXT unchanged when terminal presentation is disabled."
-  (if *terminal-presentation-enabled*
-      (format nil "~c[~:[~;1;~]~dm~a~c[0m"
-              +escape-character+ bold (ansi-color-code color) text
-              +escape-character+)
-      text))
+;;; Presentation wrappers
 
 (defun terminal-colorize (text color &key bold)
   "Colorize TEXT only for terminal presentation output."
   (if (terminal-output-tty-p)
       (ansi-colorize text color :bold bold)
-      text))
-
-(defun ansi-reverse-video (text)
-  "Wrap TEXT in reverse video, unless terminal presentation is disabled."
-  (if *terminal-presentation-enabled*
-      (format nil "~c[7m~a~c[0m" +escape-character+ text +escape-character+)
       text))
 
 (defun terminal-fresh-line ()
@@ -629,88 +329,3 @@
         (force-output))
       (fresh-line))
   (values))
-
-(defun ansi-cursor-up (lines)
-  "Return the sequence moving the cursor LINES up, or an empty string."
-  (if (and *terminal-presentation-enabled* (plusp lines))
-      (format nil "~c[~dA" +escape-character+ lines)
-      ""))
-
-(defun ansi-cursor-column (column)
-  "Return the sequence moving the cursor to zero-based COLUMN."
-  (if *terminal-presentation-enabled*
-      (format nil "~c[~dG" +escape-character+ (1+ column))
-      ""))
-
-(defun ansi-cursor-hide ()
-  "Return the sequence that hides the terminal cursor."
-  (if *terminal-presentation-enabled*
-      (format nil "~c[?25l" +escape-character+)
-      ""))
-
-(defun ansi-cursor-show ()
-  "Return the sequence that makes the terminal cursor visible."
-  (if *terminal-presentation-enabled*
-      (format nil "~c[?25h" +escape-character+)
-      ""))
-
-(defun ansi-clear-below ()
-  "Return the sequence clearing from the cursor to the screen end."
-  (if *terminal-presentation-enabled*
-      (format nil "~c[J" +escape-character+)
-      ""))
-
-(defun ansi-clear-line-right ()
-  "Return the sequence clearing from the cursor to the line end."
-  (if *terminal-presentation-enabled*
-      (format nil "~c[K" +escape-character+)
-      ""))
-
-(defun ansi-clear-screen ()
-  "Return the sequence clearing the whole screen and homing the cursor."
-  (if *terminal-presentation-enabled*
-      (format nil "~c[H~c[2J" +escape-character+ +escape-character+)
-      ""))
-
-(defun ansi--skip-csi (string start)
-  "Return the index just past a CSI sequence body starting at START."
-  (loop for index from start below (length string)
-        for code = (char-code (char string index))
-        when (<= #x40 code #x7e)
-          return (1+ index)
-        finally (return (length string))))
-
-(defun ansi--skip-osc (string start)
-  "Return the index just past an OSC sequence body starting at START."
-  (loop for index from start below (length string)
-        for char = (char string index)
-        when (char= char (code-char 7))
-          return (1+ index)
-        when (and (char= char +escape-character+)
-                  (< (1+ index) (length string))
-                  (char= (char string (1+ index)) #\\))
-          return (+ index 2)
-        finally (return (length string))))
-
-(defun ansi-strip (string)
-  "Remove ANSI escape sequences from STRING."
-  (with-output-to-string (clean)
-    (let ((index  0)
-          (length (length string)))
-      (loop while (< index length)
-            do (let ((char (char string index)))
-                 (cond ((and (char= char +escape-character+)
-                             (< (1+ index) length))
-                        (let ((kind (char string (1+ index))))
-                          (setf index
-                                (case kind
-                                  (#\[ (ansi--skip-csi string (+ index 2)))
-                                  (#\] (ansi--skip-osc string (+ index 2)))
-                                  (t   (+ index 2))))))
-                       (t
-                        (write-char char clean)
-                        (incf index))))))))
-
-(defun ansi-display-width (string)
-  "Return the number of visible terminal cells STRING occupies."
-  (terminal-text-cell-width (ansi-strip string)))

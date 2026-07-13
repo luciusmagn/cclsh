@@ -15,11 +15,25 @@
                 #:external-call
                 #:*break-hook*
                 #:*command-line-argument-list*)
+  (:import-from #:clinedi
+                #:*presentation-enabled*
+                #:ansi-colorize
+                #:ansi-reverse-video
+                #:ansi-cursor-up
+                #:ansi-cursor-column
+                #:ansi-cursor-hide
+                #:ansi-cursor-show
+                #:ansi-clear-below
+                #:ansi-clear-line-right
+                #:ansi-clear-screen
+                #:ansi-strip
+                #:ansi-display-width)
   (:shadow #:export)
   (:export #:main
            #:shell-toplevel
            #:*cclsh-version*
            #:*cclsh-build-commit*
+           #:*cclsh-build-clinedi-commit*
            #:command
            #:command-name
            #:command-function

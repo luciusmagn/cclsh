@@ -694,7 +694,7 @@
                                 (*standard-output* output)
                                 (*error-output* error-stream)
                                 (*package* package)
-                                (*terminal-presentation-enabled*
+                                (*presentation-enabled*
                                   (and presentation-enabled
                                        (not presentation-disabled))))
                             (let ((status
@@ -929,7 +929,7 @@
         (standard-output *standard-output*)
         (error-output *error-output*)
         (package *package*)
-        (presentation-enabled *terminal-presentation-enabled*))
+        (presentation-enabled *presentation-enabled*))
     (setf (pipeline-task-group-tasks group) nil)
     (dolist (stage (pipeline-plan-stages plan))
       (when (eq (pipeline-stage-kind stage) ':builtin)

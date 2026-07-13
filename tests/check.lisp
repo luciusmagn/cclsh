@@ -45,6 +45,16 @@
       (ccl::%get-utf-8-cstring pointer))))
 
 
+;;;; -- Clinedi boundary --
+
+(check-equal "Clinedi supplies ANSI presentation"
+             (find-symbol "ANSI-STRIP" '#:clinedi)
+             'cclsh::ansi-strip)
+(check-equal "Clinedi supplies Unicode cell geometry"
+             2
+             (clinedi:text-cell-width "猫"))
+
+
 ;;;; -- Multiline Lisp --
 
 (let ((lisp-line (format nil "(progn~% ; ignored )~% 42)"))
@@ -115,7 +125,13 @@
                (cclsh::completion--common-prefix
                 (list (cclsh::completion--escape (format nil "a~%x"))
                       (cclsh::completion--escape
-                       (format nil "a~cy" (code-char 27)))))))
+                       (format nil "a~cy" (code-char 27))))))
+  (check-equal "unique non-directory completion adds a space"
+               "printf "
+               (cclsh::line-editor--accept-completion "printf"))
+  (check-equal "unique directory completion remains open"
+               "source/"
+               (cclsh::line-editor--accept-completion "source/")))
 
 
 ;;;; -- History --
@@ -139,10 +155,6 @@
                multiline
                (cclsh::history-suggestion
                 "echo one" (check-history multiline)))
-  (check-equal "multiline recall remains exact"
-               multiline
-               (cclsh::editor--history-entry
-                (check-history multiline) 0))
   (check-equal "printed history string round-trips"
                multiline
                (read-from-string
@@ -245,118 +257,6 @@
                                      :code 2)))))))
     (when old-locale
       (check-set-locale old-locale))))
-
-
-;;;; -- Cursor movement and layout --
-
-(check-equal "right moves within input"
-             '("abc" 2)
-             (multiple-value-list
-              (cclsh::editor--move-right "abc" 1 "abcdef")))
-(check-equal "right accepts at input end"
-             '("abcdef" 6)
-             (multiple-value-list
-              (cclsh::editor--move-right "abc" 3 "abcdef")))
-(check-equal "right without suggestion stays at end"
-             '("abc" 3)
-             (multiple-value-list
-              (cclsh::editor--move-right "abc" 3 nil)))
-
-(let* ((combined (format nil "e~c" (code-char #x301)))
-       (family "👨‍👩‍👧‍👦")
-       (flag "🇨🇿"))
-  (check-equal "CJK character occupies two terminal cells"
-               2 (cclsh::terminal-text-cell-width "猫"))
-  (check-equal "emoji occupies two terminal cells"
-               2 (cclsh::terminal-text-cell-width "🐈"))
-  (check-equal "combining sequence occupies one terminal cell"
-               1 (cclsh::terminal-text-cell-width combined))
-  (check-equal "joined emoji occupies one wide glyph"
-               2 (cclsh::terminal-text-cell-width family))
-  (check-equal "regional-indicator pair occupies one wide glyph"
-               2 (cclsh::terminal-text-cell-width flag))
-  (check-equal "ANSI styling does not change Unicode cell width"
-               2 (cclsh::ansi-display-width
-                  (cclsh::ansi-colorize "猫" ':green)))
-  (check-equal "right skips a complete combining sequence"
-               (list combined (length combined))
-               (multiple-value-list
-                (cclsh::editor--move-right combined 0 nil)))
-  (check-equal "backspace removes a complete combining sequence"
-               '("x" 0)
-               (multiple-value-list
-                (cclsh::editor--delete-before
-                 (concatenate 'string combined "x")
-                 (length combined))))
-  (check-equal "delete removes a complete joined emoji"
-               '("x" 0)
-               (multiple-value-list
-                (cclsh::editor--delete-at
-                 (concatenate 'string family "x") 0)))
-  (check-equal "wide glyph ends at the terminal edge"
-               '(1 0 t)
-               (multiple-value-list
-                (cclsh::editor--screen-position "aa猫" 0 4)))
-  (check-equal "wide glyph wraps intact at the terminal edge"
-               '(1 2 nil)
-               (multiple-value-list
-                (cclsh::editor--screen-position "aaa猫" 0 4)))
-  (check-equal "combining sequence advances one screen cell"
-               '(0 1 nil)
-               (multiple-value-list
-                (cclsh::editor--screen-position combined 0 4)))
-  (check-equal "completion columns use display-cell widths"
-               (format nil "猫  a   ~%")
-               (with-output-to-string (stream)
-                 (let ((*standard-output* stream))
-                   (cclsh::editor--print-candidates
-                    '("猫" "a") 8)))))
-
-(let ((cases `((""                    (0 2 nil))
-               ("a"                   (0 3 nil))
-               ("ab"                  (1 0 t))
-               (,(format nil "ab~%")   (1 0 nil))
-               (,(format nil "ab~%~%") (2 0 nil))
-               (,(format nil "abc~%")  (2 0 nil)))))
-  (dolist (case cases)
-    (destructuring-bind (text expected) case
-      (check-equal (format nil "screen position for ~s" text)
-                   expected
-                   (multiple-value-list
-                    (cclsh::editor--screen-position text 2 4))))))
-
-(let ((text (format nil "a~%b")))
-  (check-equal "cursor before newline"
-               '(0 1 nil)
-               (multiple-value-list
-                (cclsh::editor--screen-position text 0 4 :end 1)))
-  (check-equal "cursor after newline"
-               '(1 0 nil)
-               (multiple-value-list
-                (cclsh::editor--screen-position text 0 4 :end 2)))
-  (check-equal "display writes carriage return after newline"
-               (format nil "a~%~cb" #\return)
-               (with-output-to-string (*standard-output*)
-                 (cclsh::editor--write-display text))))
-
-(let ((rendered
-        (with-output-to-string (*standard-output*)
-          (cclsh::editor--render 7 "pri" 3 80 0
-                                 :suggestion "ntf example"))))
-  (check-equal "redraw hides the cursor before repositioning"
-               t
-               (cclsh::string-prefix-p (cclsh::ansi-cursor-hide) rendered))
-  (check-equal "redraw never erases or repaints the static prompt"
-               nil
-               (or (find #\return rendered)
-                   (search "root" rendered)))
-  (check-equal "redraw restores the cursor after positioning"
-               t
-               (let ((show (cclsh::ansi-cursor-show)))
-                 (and (>= (length rendered) (length show))
-                      (string= show rendered
-                               :start2 (- (length rendered)
-                                          (length show)))))))
 
 
 ;;;; -- Lisp-dispatched shell status --

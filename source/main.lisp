@@ -16,6 +16,10 @@
   "Git commit the running binary was built from, stamped into the
    image by scripts/build.lisp. NIL in plain REPL sessions.")
 
+(defvar *cclsh-build-clinedi-commit* nil
+  "Clinedi commit included in the running binary, stamped into the
+   image by scripts/build.lisp. NIL in plain REPL sessions.")
+
 (defun terminal--encoding-leaves (&rest roots)
   "Return the distinct base streams below composite stream ROOTS."
   (let ((pending (copy-list roots))
@@ -248,9 +252,10 @@
                                   "cclsh: -c requires an argument~%")
                           (shell-quit 2))))
                    ((string= argument "--version")
-                    (format t "cclsh ~a~@[ (~a)~] (~a ~a)~%"
+                    (format t "cclsh ~a~@[ (~a)~]~@[ (clinedi ~a)~] (~a ~a)~%"
                             *cclsh-version*
                             *cclsh-build-commit*
+                            *cclsh-build-clinedi-commit*
                             (lisp-implementation-type)
                             (lisp-implementation-version))
                     (shell-quit 0))

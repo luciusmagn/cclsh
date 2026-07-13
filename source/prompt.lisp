@@ -52,11 +52,3 @@
   "Return the prompt string for the next command line."
   (or (prompt-starship status duration-milliseconds columns)
       (prompt-fallback)))
-
-(defun prompt-split (prompt)
-  "Split PROMPT into (values preamble edit-line): everything up to and
-   including the last newline, and the final line the editor redraws."
-  (let ((break (position #\newline prompt :from-end t)))
-    (if break
-        (values (subseq prompt 0 (1+ break)) (subseq prompt (1+ break)))
-        (values "" prompt))))
