@@ -34,6 +34,7 @@
            #:*cclsh-version*
            #:*cclsh-build-commit*
            #:*cclsh-build-clinedi-commit*
+           #:*directory-change-hooks*
            #:command
            #:command-name
            #:command-function
@@ -48,6 +49,11 @@
            #:any
            #:*last-status*
            #:cd
+           #:directory-change-hook-add
+           #:directory-change-hook-remove
+           #:zoxide-setup
+           #:z
+           #:zi
            #:exit
            #:rehash
            #:commands

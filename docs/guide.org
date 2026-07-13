@@ -211,8 +211,45 @@ fine.
 
 Builtins that ship with the shell: =cd= (supports =-=, updates =PWD=
 and =OLDPWD=), =exit=, =export=, =unset=, =rehash= (drop cached =PATH=
-lookups and completions), =commands= (list all defined commands) and
-=help= (the built-in manual; =help SECTION= elaborates).
+lookups and completions), =commands= (list all defined commands),
+=zoxide-setup= and =help= (the built-in manual; =help SECTION=
+elaborates).
+
+Every successful directory change runs the functions registered with
+=directory-change-hook-add=. A hook receives the old and new absolute
+directory names after =PWD=, =OLDPWD= and CCL's default directory have
+been updated. A failing hook is reported but cannot undo the directory
+change or prevent later hooks from running:
+
+#+begin_src lisp
+(defun announce-directory (old new)
+  (format t "moved from ~a to ~a~%" old new))
+
+(directory-change-hook-add 'announce-directory)
+(directory-change-hook-remove 'announce-directory)
+#+end_src
+
+Use the symbol form for named hooks so redefining the function does not
+change its registration identity. A hook cannot change directory again;
+a reentrant =cd= is rejected so every later hook observes coherent state.
+
+The optional zoxide adapter uses that hook. Install =zoxide=, and =fzf=
+for interactive selection, then put =(zoxide-setup)= in
+=startup.lisp=. It records the current directory, records later changes
+and installs two commands:
+
+#+begin_src text
+z                 go home
+z -               go to OLDPWD
+z ./existing      enter an existing path directly
+z project src     query zoxide and enter the best match
+zi project        select a zoxide match interactively through fzf
+#+end_src
+
+=zoxide-setup= is idempotent and activates its hook and commands only after
+zoxide records the current directory successfully. If zoxide disappears,
+running setup again removes its stale hook and command bindings. Until setup
+succeeds, an external program named =z= or =zi= can still resolve.
 
 * Pipelines and sequencing
 
@@ -415,6 +452,9 @@ A reasonable starting point:
 (defcommand serve (&optional (port "8000"))
   "Serve the current directory over HTTP."
   (run "python3" "-m" "http.server" port))
+
+;; Optional ranked directory navigation
+(zoxide-setup)
 #+end_src
 
 * Quicklisp and scripting

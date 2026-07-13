@@ -140,8 +140,9 @@ An integer return value becomes the exit status, anything else means
   (cmd git \"diff\" file)    macro, head resolves like a command word
 
 Builtins: cd (with -), exit, export, unset, rehash, commands, help,
-jobs, fg, bg. Saved cclsh images include Quicklisp; quicklisp-setup
-loads or installs it when running from an unsaved development image.
+jobs, fg, bg and zoxide-setup. Saved cclsh images include Quicklisp;
+quicklisp-setup loads or installs it when running from an unsaved development
+image.
 commands lists everything currently defined.")
 
     ("pipelines" "pipe, seq, all and any"
@@ -278,10 +279,35 @@ Lowercase names like http_proxy need strings. ~ does not expand after
     \"Long listing including hidden files.\"
     (run \"ls\" \"-la\"))
   (defvar *project* \"~/common-lisp/cclsh\")
+  (zoxide-setup)
 
 A broken startup file prints its error and the shell starts anyway.
 CCLSH_SAFE=1 skips startup.lisp and history entirely, the escape hatch
 when user state misbehaves.")
+
+    ("directories" "directory hooks and zoxide"
+     "Register a function to observe every successful directory change:
+
+  (defun announce-directory (old new)
+    (format t \"moved from ~a to ~a~%\" old new))
+  (directory-change-hook-add 'announce-directory)
+  (directory-change-hook-remove 'announce-directory)
+
+Hooks run after PWD, OLDPWD and CCL's default directory are committed.
+A failing hook is reported without undoing cd or skipping later hooks. Use
+symbols for named hooks so redefinition retains identity. A hook cannot call
+cd again; reentrant changes are rejected to keep later hook state coherent.
+
+Install zoxide, and fzf for interactive selection, then call this once
+from startup.lisp:
+
+  (zoxide-setup)
+
+After zoxide records the current directory successfully, setup installs its
+change hook, z and zi. z with no arguments goes home, z - goes to OLDPWD, an
+existing path is entered directly and other arguments query zoxide. zi runs
+zoxide's interactive query. Running setup after zoxide disappears removes
+its stale hook and command bindings.")
 
     ("scripting" "one-shots, scripts and shebangs"
      "Three non-interactive modes, all skipping startup.lisp and

@@ -302,6 +302,44 @@ exec sleep 30
    "#!/bin/sh
 printf '%s\\n' \"$1\"
 ")
+  (integration-write-program
+   "zoxide"
+   "#!/bin/sh
+log=$CCLSH_TEST_ROOT/zoxide.log
+command=$1
+shift
+{
+    printf '%s' \"$command\"
+    for argument do printf '|%s' \"$argument\"; done
+    printf '\\n'
+} >> \"$log\"
+case \"$command\" in
+    add)
+        case \"$*\" in *add-fail*) exit 9;; esac
+        ;;
+    query)
+        case \"$*\" in
+            *fail*) exit 7;;
+            *empty*) exit 0;;
+            *--interactive*) cat \"$CCLSH_TEST_ROOT/zoxide-interactive-result\";;
+            *) cat \"$CCLSH_TEST_ROOT/zoxide-result\";;
+        esac
+        ;;
+    *)
+        exit 2
+        ;;
+esac
+")
+  (integration-write-program
+   "z"
+   "#!/bin/sh
+exit 0
+")
+  (integration-write-program
+   "zi"
+   "#!/bin/sh
+exit 0
+")
   ;; An executable without a recognized image or interpreter makes
   ;; POSIX-SPAWN fail after preceding children have been created.
   (integration-write-program "bad-program"
@@ -473,6 +511,149 @@ printf '%s\\n' \"$1\"
      (integration-contains-p "__BAKED_CLINEDI__T__" output)
      "saved image has no pinned working Clinedi: ~a"
      (integration-tail output))))
+
+(defun integration-check-zoxide ()
+  "Require transactional setup, tracking and z/zi queries to share cd hooks."
+  (let* ((root                (integration-path "zoxide-root/"))
+         (initial-add-fail    (integration-path
+                               "zoxide-root/initial-add-fail/"))
+         (tracked             (integration-path "zoxide-root/tracked/"))
+         (direct              (integration-path "zoxide-root/direct/"))
+         (missing             (integration-path "zoxide-root/missing/"))
+         (query-target        (integration-path "zoxide-root/query/"))
+         (interactive-target  (integration-path
+                               "zoxide-root/interactive/"))
+         (add-fail            (integration-path "zoxide-root/add-fail/"))
+         (zoxide-program      (concatenate
+                               'string *integration-bin-directory* "zoxide"))
+         (log-path            (integration-path "zoxide.log")))
+    (dolist (directory (list initial-add-fail tracked direct query-target
+                             interactive-target add-fail))
+      (ensure-directories-exist
+       (concatenate 'string directory ".keep")))
+    (integration-write-file
+     (integration-path "zoxide-result")
+     (format nil "~a~%" (string-right-trim "/" query-target)))
+    (integration-write-file
+     (integration-path "zoxide-interactive-result")
+     (format nil "~a~%" (string-right-trim "/" interactive-target)))
+    (ignore-errors (delete-file log-path))
+    (let* ((form
+             (format nil
+                     "(progn
+                        (cd ~s)
+                        (format t \"__ZO_SETUP_FAIL__~~d__~~%\"
+                                (zoxide-setup))
+                        (format t \"__ZO_SETUP_FAIL_UNBOUND__~~s__~~%\"
+                                (not
+                                 (or (boundp 'z)
+                                     (boundp 'zi)
+                                     (member
+                                      'cclsh::zoxide--directory-change
+                                      *directory-change-hooks*))))
+                        (cd ~s)
+                        (format t \"__ZO_SETUP_1__~~d__~~%\"
+                                (zoxide-setup))
+                        (format t \"__ZO_SETUP_2__~~d__~~%\"
+                                (zoxide-setup))
+                        (format t \"__ZO_TRACKED__~~d__~~%\" (cd ~s))
+                        (format t \"__ZO_DIRECT__~~d__~~%\" (z ~s))
+                        (format t \"__ZO_LITERAL_MISSING__~~d__~~%\"
+                                (z \"--\" ~s))
+                        (format t \"__ZO_QUERY__~~d__~~%\"
+                                (cclsh::dispatch-line \"z keyword\"))
+                        (format t \"__ZO_QUERY_PWD__~~a__~~%\" (getenv \"PWD\"))
+                        (format t \"__ZO_INTERACTIVE__~~d__~~%\" (zi \"pick\"))
+                        (format t \"__ZO_INTERACTIVE_PWD__~~a__~~%\"
+                                (getenv \"PWD\"))
+                        (format t \"__ZO_EMPTY__~~d__~~%\" (z \"empty\"))
+                        (format t \"__ZO_EMPTY_PWD__~~a__~~%\" (getenv \"PWD\"))
+                        (format t \"__ZO_FAIL__~~d__~~%\" (z \"fail\"))
+                        (format t \"__ZO_FAIL_PWD__~~a__~~%\" (getenv \"PWD\"))
+                        (format t \"__ZO_ADD_FAIL__~~d__~~%\" (cd ~s))
+                        (delete-file ~s)
+                        (format t \"__ZO_MISSING_SETUP__~~d__~~%\"
+                                (zoxide-setup))
+                        (multiple-value-bind (kind target)
+                            (cclsh::command-resolve-fresh \"z\")
+                          (declare (ignore target))
+                          (format t \"__ZO_EXTERNAL_Z__~~s__~~%\" kind))
+                        (multiple-value-bind (kind target)
+                            (cclsh::command-resolve-fresh \"zi\")
+                          (declare (ignore target))
+                          (format t \"__ZO_EXTERNAL_ZI__~~s__~~%\" kind))
+                        (run \"true\"))"
+                     initial-add-fail root tracked direct missing
+                     add-fail zoxide-program))
+           (result (integration-run form))
+           (output (direct-result-output result))
+           (log    (and (probe-file log-path)
+                        (integration-read-file log-path))))
+      (integration-require-success result "zoxide integration")
+      (dolist (marker '("__ZO_SETUP_FAIL__9__"
+                        "__ZO_SETUP_FAIL_UNBOUND__T__"
+                        "__ZO_SETUP_1__0__"
+                        "__ZO_SETUP_2__0__"
+                        "__ZO_TRACKED__0__"
+                        "__ZO_DIRECT__0__"
+                        "__ZO_LITERAL_MISSING__1__"
+                        "__ZO_QUERY__0__"
+                        "__ZO_INTERACTIVE__0__"
+                        "__ZO_EMPTY__1__"
+                        "__ZO_FAIL__7__"
+                        "__ZO_ADD_FAIL__0__"
+                        "__ZO_MISSING_SETUP__127__"
+                        "__ZO_EXTERNAL_Z__:EXTERNAL__"
+                        "__ZO_EXTERNAL_ZI__:EXTERNAL__"))
+        (integration-ensure
+         (integration-contains-p marker output)
+         "zoxide output lacks ~a: ~a" marker (integration-tail output)))
+      (integration-ensure
+       (integration-contains-p
+        (format nil "__ZO_QUERY_PWD__~a__"
+                (string-right-trim "/" query-target))
+        output)
+       "z did not enter query result: ~a" (integration-tail output))
+      (integration-ensure
+       (integration-contains-p
+        (format nil "__ZO_INTERACTIVE_PWD__~a__"
+                (string-right-trim "/" interactive-target))
+        output)
+       "zi did not enter interactive result: ~a" (integration-tail output))
+      (integration-ensure
+       (integration-contains-p
+        (format nil "__ZO_FAIL_PWD__~a__"
+                (string-right-trim "/" interactive-target))
+       output)
+       "failed z query changed directory: ~a" (integration-tail output))
+      (integration-ensure
+       (integration-contains-p
+        (format nil "__ZO_EMPTY_PWD__~a__"
+                (string-right-trim "/" interactive-target))
+        output)
+       "empty z query changed directory: ~a" (integration-tail output))
+      (let ((expected
+              (format nil
+                      "add|--|~a~%add|--|~a~%add|--|~a~%add|--|~a~%~
+                       query|--exclude|~a|--|keyword~%add|--|~a~%~
+                       query|--interactive|--|pick~%add|--|~a~%~
+                       query|--exclude|~a|--|empty~%~
+                       query|--exclude|~a|--|fail~%~
+                       add|--|~a~%"
+                      (string-right-trim "/" initial-add-fail)
+                      (string-right-trim "/" root)
+                      (string-right-trim "/" tracked)
+                      (string-right-trim "/" direct)
+                      (string-right-trim "/" direct)
+                      (string-right-trim "/" query-target)
+                      (string-right-trim "/" interactive-target)
+                      (string-right-trim "/" interactive-target)
+                      (string-right-trim "/" interactive-target)
+                      (string-right-trim "/" add-fail))))
+        (integration-ensure
+         (and log (string= expected log))
+         "zoxide argv/tracking log mismatch:~%expected ~s~%actual ~s"
+         expected log)))))
 
 (defun integration-check-no-polling ()
   "Require process and job state changes to be event driven."
@@ -1530,6 +1711,8 @@ printf '%s\\n' \"$1\"
                         #'integration-check-baked-quicklisp)
       (integration-test "Clinedi baked into saved image"
                         #'integration-check-baked-clinedi)
+      (integration-test "zoxide directory integration"
+                        #'integration-check-zoxide)
       (integration-test "event-driven child state"
                         #'integration-check-no-polling)
       (integration-test "one process group per pipeline"

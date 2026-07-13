@@ -5,45 +5,6 @@
 
 (in-package #:cclsh)
 
-(defun directory-namestring-clean (pathname)
-  "Namestring of PATHNAME without a trailing slash, except for /."
-  (let ((name (namestring pathname)))
-    (if (and (> (length name) 1)
-             (char= (char name (1- (length name))) #\/))
-        (subseq name 0 (1- (length name)))
-        name)))
-
-(defcommand cd (&optional target)
-  "Change the working directory. Without TARGET goes home, with - goes
-   back to the previous directory. Keeps PWD and OLDPWD updated."
-  (let* ((old         (directory-namestring-clean (current-directory)))
-         (back        (equal target "-"))
-         (destination (cond ((or (null target) (equal target ""))
-                             (home-directory))
-                            (back
-                             (getenv "OLDPWD"))
-                            (t
-                             (tilde-expand target)))))
-    (when (null destination)
-      (format *error-output* "~a~%"
-              (terminal-colorize "cd: OLDPWD not set" ':red))
-      (return-from cd 1))
-    (handler-case
-        (setf (current-directory) destination)
-      (error ()
-        (format *error-output* "~a~%"
-                (terminal-colorize
-                 (format nil "cd: cannot change to ~a" destination)
-                 ':red))
-        (return-from cd 1)))
-    (let ((new (directory-namestring-clean (current-directory))))
-      (setf *default-pathname-defaults* (current-directory))
-      (setenv "OLDPWD" old)
-      (setenv "PWD" new)
-      (when back
-        (format t "~a~%" new)))
-    0))
-
 (defcommand exit (&optional status)
   "Exit the shell. STATUS defaults to the last command's status. With
    stopped jobs the first exit only warns; exit again to leave anyway."

@@ -12,6 +12,7 @@ Unix command or a Lisp form, evaluated in a live CCL image.
 - Clinedi at the revision recorded in =dependencies.lock=, registered as a
   Quicklisp local project
 - starship (prompt rendering, with a plain fallback when missing)
+- zoxide (optional directory ranking; =fzf= is also needed for =zi=)
 - Linux (terminal control talks to libc termios/ioctl directly)
 
 Clinedi supplies the Unicode-aware terminal line editor. For sibling checkouts
@@ -99,6 +100,9 @@ scripts/integration-check
 - Environment variables are lispy: =(setenv 'editor "vim")=,
   =(getenv :home)=, =(setf (env 'port) 8000)=, plus =export= and
   =unset= builtins.
+- =(zoxide-setup)= enables =z=, =zi= and automatic recording of every
+  successful =cd=. It is safe to call once from =startup.lisp= and does
+  nothing destructive when zoxide is unavailable.
 
 * Lisp helpers
 
@@ -122,6 +126,11 @@ scripts/integration-check
 (defcommand gs ()
   "Short git status."
   (run "git" "status" "--short"))
+
+;; Optional ranked directory navigation
+(zoxide-setup)
+;; z project       ; query zoxide and cd to the result
+;; zi              ; choose interactively through fzf
 #+end_src
 
 =*last-status*= holds the exit status of the last command.

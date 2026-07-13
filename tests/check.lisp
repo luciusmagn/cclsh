@@ -311,6 +311,116 @@
                                     :if-does-not-exist ':ignore)))))
 
 
+;;;; -- Directory-change hooks --
+
+(let* ((root
+         (format nil "/tmp/cclsh-check-directory-hooks-~d/"
+                 (ccl:external-call "getpid" :int)))
+       (child         (concatenate 'string root "child/"))
+       (nested        (concatenate 'string root "nested/"))
+       (missing       (concatenate 'string root "missing/"))
+       (old-directory (ccl:current-directory))
+       (old-defaults  *default-pathname-defaults*)
+       (old-pwd       (cclsh:getenv "PWD"))
+       (old-oldpwd    (cclsh:getenv "OLDPWD"))
+       (events        nil))
+  (flet ((restore-environment (name value)
+           (if value
+               (cclsh:setenv name value)
+               (cclsh::unsetenv name))))
+    (unwind-protect
+        (let ((cclsh:*directory-change-hooks* nil)
+              (*error-output* (make-broadcast-stream)))
+          (ensure-directories-exist
+           (concatenate 'string child ".keep"))
+          (ensure-directories-exist
+           (concatenate 'string nested ".keep"))
+          (cclsh:cd root)
+          (labels ((record-state (old new)
+                     (push (list ':first old new
+                                 (cclsh:getenv "OLDPWD")
+                                 (cclsh:getenv "PWD")
+                                 (cclsh::directory-namestring-clean
+                                  *default-pathname-defaults*))
+                           events))
+
+                   (fail-after-recording (old new)
+                     (declare (ignore old new))
+                     (push (list ':failing) events)
+                     (error "hook failure"))
+
+                   (record-later (old new)
+                     (declare (ignore old new))
+                     (push (list ':later) events)))
+            (cclsh:directory-change-hook-add #'record-state)
+            (cclsh:directory-change-hook-add #'fail-after-recording)
+            (cclsh:directory-change-hook-add #'record-later)
+            (cclsh:directory-change-hook-add #'record-state)
+            (check-equal "directory hook registration is idempotent"
+                         3
+                         (length cclsh:*directory-change-hooks*))
+            (check-equal "successful cd survives a failing hook"
+                         0
+                         (cclsh:cd child))
+            (let ((ordered (nreverse events)))
+              (check-equal "directory hooks retain registration order"
+                           '(:first :failing :later)
+                           (mapcar #'first ordered))
+              (check-equal "directory hook sees committed state"
+                           (list ':first
+                                 (string-right-trim "/" root)
+                                 (string-right-trim "/" child)
+                                 (string-right-trim "/" root)
+                                 (string-right-trim "/" child)
+                                 (string-right-trim "/" child))
+                           (first ordered)))
+            (setf events nil)
+            (check-equal "same-directory cd succeeds"
+                         0
+                         (cclsh:cd child))
+            (check-equal "same-directory cd does not run hooks"
+                         nil events)
+            (check-equal "failed cd reports failure"
+                         1
+                         (cclsh:cd missing))
+            (check-equal "failed cd does not run hooks"
+                         nil events)
+            (cclsh:directory-change-hook-remove #'record-later)
+            (check-equal "directory hook removal takes effect"
+                         2
+                         (length cclsh:*directory-change-hooks*)))
+          (let ((nested-status nil)
+                (later-pwd nil)
+                (cclsh:*directory-change-hooks* nil))
+            (cclsh:cd root)
+            (labels ((change-again (old new)
+                       (declare (ignore old new))
+                       (setf nested-status (cclsh:cd nested)))
+
+                     (record-final-pwd (old new)
+                       (declare (ignore old new))
+                       (setf later-pwd (cclsh:getenv "PWD"))))
+              (cclsh:directory-change-hook-add #'change-again)
+              (cclsh:directory-change-hook-add #'record-final-pwd)
+              (check-equal "outer cd survives a reentrant hook"
+                           0
+                           (cclsh:cd child))
+              (check-equal "directory hooks reject a reentrant cd"
+                           1 nested-status)
+              (check-equal "reentrant cd leaves committed state coherent"
+                           (string-right-trim "/" child)
+                           later-pwd))))
+      (ignore-errors
+        (setf (ccl:current-directory) old-directory))
+      (setf *default-pathname-defaults* old-defaults)
+      (restore-environment "PWD" old-pwd)
+      (restore-environment "OLDPWD" old-oldpwd)
+      (ignore-errors
+        (uiop:delete-directory-tree root
+                                    :validate t
+                                    :if-does-not-exist ':ignore)))))
+
+
 ;;;; -- History --
 
 (let* ((multiline (format nil "echo one~%echo two"))
