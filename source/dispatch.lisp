@@ -82,22 +82,49 @@
                (word-evaluates-alone-p trimmed))
       (dispatch-lisp trimmed))))
 
+(defun dispatch--report-red (text)
+  "Print TEXT in red on standard error."
+  (format *error-output* "~a~%" (ansi-colorize text ':red))
+  (force-output *error-output*)
+  (values))
+
 (defun dispatch-command (line)
-  "Execute LINE as a shell command line. Returns an exit status."
+  "Execute LINE as a shell command line. Returns an exit status. An
+   unescaped trailing & launches the command as a background job."
   (handler-case
-      (let ((words (command-line-words line)))
-        (if (null words)
-            *last-status*
-            (multiple-value-bind (kind target)
-                (command-resolve-fresh (first words))
-              (let ((*job-command-label*
-                      (string-trim *whitespace-characters* line)))
-                (ecase kind
-                  (:builtin  (command-execute-builtin target (rest words)))
-                  (:external (command-execute-external target (rest words)))
-                  (:unknown  (or (dispatch--lone-value-status line)
-                                 (error 'command-not-found-error
-                                        :name (first words)))))))))
+      (multiple-value-bind (line background)
+          (command-line-background-split line)
+        (let ((words (command-line-words line)))
+          (cond ((and (null words) background)
+                 (dispatch--report-red "cclsh: & needs a command")
+                 2)
+                ((null words)
+                 *last-status*)
+                (t
+                 (multiple-value-bind (kind target)
+                     (command-resolve-fresh (first words))
+                   (let ((*job-command-label*
+                           (string-trim *whitespace-characters* line)))
+                     (ecase kind
+                       (:builtin
+                        (cond (background
+                               (dispatch--report-red
+                                (format nil "cclsh: cannot background the ~
+                                             builtin ~a"
+                                        (first words)))
+                               1)
+                              (t
+                               (command-execute-builtin target
+                                                        (rest words)))))
+                       (:external
+                        (if background
+                            (command-execute-background target (rest words))
+                            (command-execute-external target (rest words))))
+                       (:unknown
+                        (or (and (not background)
+                                 (dispatch--lone-value-status line))
+                            (error 'command-not-found-error
+                                   :name (first words)))))))))))
     (shell-error (condition)
       (dispatch-report-error condition)
       127)

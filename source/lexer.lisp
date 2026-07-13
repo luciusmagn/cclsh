@@ -138,6 +138,37 @@
       (values (nreverse tokens) open))))
 
 
+(defun command-word--background-ampersand-p (text)
+  "True when a word TEXT ends in a background &: one unescaped & that
+   is not part of a && pair."
+  (let* ((length      (length text))
+         (backslashes (loop for index downfrom (- length 2) to 0
+                            while (char= (char text index) #\\)
+                            count 1)))
+    (and (plusp length)
+         (char= (char text (1- length)) #\&)
+         (evenp backslashes)
+         (or (= length 1)
+             (not (char= (char text (- length 2)) #\&))))))
+
+(defun command-line-background-split (line)
+  "Detect an unescaped trailing & on a command LINE. Returns (values
+   line background) where LINE has the & removed when BACKGROUND is
+   true. Escaped and quoted ampersands and && stay ordinary text."
+  (multiple-value-bind (tokens open)
+      (lex-command-line line)
+    (let ((final (find-if (lambda (token)
+                            (not (eq (token-type token) ':space)))
+                          tokens
+                          :from-end t)))
+      (if (and (null open)
+               final
+               (eq (token-type final) ':word)
+               (command-word--background-ampersand-p (token-text line final)))
+          (values (subseq line 0 (1- (token-end final))) t)
+          (values line nil)))))
+
+
 ;;; Lisp mode
 
 (defun lisp-symbol-boundary-p (char)
