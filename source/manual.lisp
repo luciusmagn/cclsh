@@ -297,9 +297,7 @@ Keep root on a stock shell. Emergency access past broken user state:
 
 (defun manual--heading (text)
   "Render a manual heading, colored only on a terminal."
-  (if (terminal-output-tty-p)
-      (ansi-colorize text ':cyan :bold t)
-      text))
+  (terminal-colorize text ':cyan :bold t))
 
 (defun manual--print-overview ()
   "Print the manual overview and section list."
@@ -311,9 +309,7 @@ Keep root on a stock shell. Emergency access past broken user state:
     (destructuring-bind (name one-liner body) section
       (declare (ignore body))
       (format t "  ~a~a~%"
-              (if (terminal-output-tty-p)
-                  (ansi-colorize (format nil "~14a" name) ':cyan)
-                  (format nil "~14a" name))
+              (terminal-colorize (format nil "~14a" name) ':cyan)
               one-liner)))
   (format t "~%help SECTION prints details. commands lists what is callable,~%~
              --version identifies the build, docs/guide.org is the long form.~%"))
@@ -324,7 +320,7 @@ Keep root on a stock shell. Emergency access past broken user state:
     (if (null section)
         (progn
           (format *error-output* "~a~%"
-                  (ansi-colorize
+                  (terminal-colorize
                    (format nil "help: no section ~a; sections are ~{~a~^, ~}"
                            name
                            (mapcar #'first *manual-sections*))

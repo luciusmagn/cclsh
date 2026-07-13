@@ -57,6 +57,10 @@
    known good state reapplied when a stopped job leaves the terminal
    in whatever mode it was using.")
 
+(defvar *terminal-presentation-enabled* t
+  "Whether output may contain terminal presentation sequences.
+   Dynamically bind this to NIL while capturing or redirecting output.")
+
 (defparameter *ansi-color-codes*
   '((:black          . 30)
     (:red            . 31)
@@ -84,8 +88,9 @@
   (= 1 (external-call "isatty" :int 0 :int)))
 
 (defun terminal-output-tty-p ()
-  "True when standard output is a terminal."
-  (= 1 (external-call "isatty" :int 1 :int)))
+  "True when terminal presentation is enabled and output is a terminal."
+  (and *terminal-presentation-enabled*
+       (= 1 (external-call "isatty" :int 1 :int))))
 
 (defun terminal--get-termios (pointer)
   "Fill POINTER with the terminal attributes. Returns true on success."
@@ -229,14 +234,25 @@
   (or (rest (assoc color *ansi-color-codes*)) 37))
 
 (defun ansi-colorize (text color &key bold)
-  "Wrap TEXT in the SGR sequence for COLOR, optionally BOLD."
-  (format nil "~c[~:[~;1;~]~dm~a~c[0m"
-          +escape-character+ bold (ansi-color-code color) text
-          +escape-character+))
+  "Wrap TEXT in the SGR sequence for COLOR, optionally BOLD.
+   Return TEXT unchanged when terminal presentation is disabled."
+  (if *terminal-presentation-enabled*
+      (format nil "~c[~:[~;1;~]~dm~a~c[0m"
+              +escape-character+ bold (ansi-color-code color) text
+              +escape-character+)
+      text))
+
+(defun terminal-colorize (text color &key bold)
+  "Colorize TEXT only for terminal presentation output."
+  (if (terminal-output-tty-p)
+      (ansi-colorize text color :bold bold)
+      text))
 
 (defun ansi-reverse-video (text)
-  "Wrap TEXT in the reverse video SGR sequence."
-  (format nil "~c[7m~a~c[0m" +escape-character+ text +escape-character+))
+  "Wrap TEXT in reverse video, unless terminal presentation is disabled."
+  (if *terminal-presentation-enabled*
+      (format nil "~c[7m~a~c[0m" +escape-character+ text +escape-character+)
+      text))
 
 (defun terminal-fresh-line ()
   "Ensure the next output starts at column 0 of a fresh line. On a
@@ -260,33 +276,45 @@
 
 (defun ansi-cursor-up (lines)
   "Return the sequence moving the cursor LINES up, or an empty string."
-  (if (plusp lines)
+  (if (and *terminal-presentation-enabled* (plusp lines))
       (format nil "~c[~dA" +escape-character+ lines)
       ""))
 
 (defun ansi-cursor-column (column)
   "Return the sequence moving the cursor to zero-based COLUMN."
-  (format nil "~c[~dG" +escape-character+ (1+ column)))
+  (if *terminal-presentation-enabled*
+      (format nil "~c[~dG" +escape-character+ (1+ column))
+      ""))
 
 (defun ansi-cursor-hide ()
   "Return the sequence that hides the terminal cursor."
-  (format nil "~c[?25l" +escape-character+))
+  (if *terminal-presentation-enabled*
+      (format nil "~c[?25l" +escape-character+)
+      ""))
 
 (defun ansi-cursor-show ()
   "Return the sequence that makes the terminal cursor visible."
-  (format nil "~c[?25h" +escape-character+))
+  (if *terminal-presentation-enabled*
+      (format nil "~c[?25h" +escape-character+)
+      ""))
 
 (defun ansi-clear-below ()
   "Return the sequence clearing from the cursor to the screen end."
-  (format nil "~c[J" +escape-character+))
+  (if *terminal-presentation-enabled*
+      (format nil "~c[J" +escape-character+)
+      ""))
 
 (defun ansi-clear-line-right ()
   "Return the sequence clearing from the cursor to the line end."
-  (format nil "~c[K" +escape-character+))
+  (if *terminal-presentation-enabled*
+      (format nil "~c[K" +escape-character+)
+      ""))
 
 (defun ansi-clear-screen ()
   "Return the sequence clearing the whole screen and homing the cursor."
-  (format nil "~c[H~c[2J" +escape-character+ +escape-character+))
+  (if *terminal-presentation-enabled*
+      (format nil "~c[H~c[2J" +escape-character+ +escape-character+)
+      ""))
 
 (defun ansi--skip-csi (string start)
   "Return the index just past a CSI sequence body starting at START."

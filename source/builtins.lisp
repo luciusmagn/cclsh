@@ -25,14 +25,16 @@
                             (t
                              (tilde-expand target)))))
     (when (null destination)
-      (format *error-output* "~a~%" (ansi-colorize "cd: OLDPWD not set" ':red))
+      (format *error-output* "~a~%"
+              (terminal-colorize "cd: OLDPWD not set" ':red))
       (return-from cd 1))
     (handler-case
         (setf (current-directory) destination)
       (error ()
         (format *error-output* "~a~%"
-                (ansi-colorize (format nil "cd: cannot change to ~a" destination)
-                               ':red))
+                (terminal-colorize
+                 (format nil "cd: cannot change to ~a" destination)
+                 ':red))
         (return-from cd 1)))
     (let ((new (directory-namestring-clean (current-directory))))
       (setf *default-pathname-defaults* (current-directory))
@@ -82,7 +84,7 @@
                (name          (format nil "~va" width
                                       (string-downcase (symbol-name symbol)))))
           (format t "~a  ~a~%"
-                  (ansi-colorize name ':cyan)
+                  (terminal-colorize name ':cyan)
                   (if documentation
                       (subseq documentation 0
                               (position #\newline documentation))
