@@ -22,6 +22,8 @@
                  (:file "builtins" :depends-on ("command" "jobs" "expand" "terminal" "history" "complete"))
                  (:file "manual"   :depends-on ("command" "terminal"))
                  (:file "line-editor" :depends-on ("terminal" "highlight" "history" "complete"))
-                 (:file "dispatch" :depends-on ("command" "jobs" "expand" "lexer" "highlight" "complete"))
+                 (:file "dispatch"
+                  :depends-on ("command" "jobs" "expand" "lexer" "highlight"
+                               "complete" "builtins"))
                  (:file "main"     :depends-on ("dispatch" "line-editor" "prompt" "builtins" "pipeline" "jobs")))))
   :description "A system shell running inside Clozure CL")

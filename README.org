@@ -69,6 +69,10 @@ scripts/integration-check
 - Otherwise the first word resolves to a shell command: a symbol whose
   value is a =command= instance runs as a builtin, anything else is
   looked up in =PATH= and run as an external program.
+- When command lookup misses, a line containing only an explicit directory
+  path changes into it without spelling =cd=: =..=, =./src=, =src/= and
+  =~/work=. Builtins and executables still win, while a bare name such as
+  =src= remains a command lookup.
 - A lone word that names a bound variable, a keyword or a number
   evaluates REPL style when no command matches: =*last-status*= alone
   just prints its value.
@@ -129,16 +133,19 @@ the cursor. As you type, the newest
 matching history entry appears after the cursor in dim text; Right or
 C-f at the end accepts it. Multi-line history entries retain their
 newlines. Alt-Enter, or Shift-Enter in terminals that report it, inserts an
-explicit newline without submitting. Tab completes command names, file paths
-and Lisp symbols. Supported keys: C-a/C-e (home/end), Ctrl-Left/Right (move by
+explicit newline without submitting. Tab completes command names plus
+directories at a slash-free command position, file paths in path-shaped
+command words and arguments, and Lisp symbols. Command-position directories
+keep the trailing =/= that makes them implicit =cd= paths. Supported keys:
+C-a/C-e (home/end), Ctrl-Left/Right (move by
 words), C-k/C-u (kill to end/whole line), C-w or C-Backspace/C-h (kill word),
 C-l (clear screen), C-d (EOF on an empty line), C-c (abort line). Input is
 highlighted with the standard 16 terminal colors: known commands green,
-builtins cyan, unknown commands red, strings yellow, comments and parens
-dim, keywords magenta, numbers cyan. Output that ends without a newline
-gets a reverse video ⏎ marker, fish style. The =help= builtin prints
-the built-in manual (=help substitution= etc.); =docs/guide.org= is the
-long form, including login shell setup.
+builtins and valid implicit directory paths cyan, unknown commands red,
+strings yellow, comments and parens dim, keywords magenta, numbers cyan.
+Output that ends without a newline gets a reverse video ⏎ marker, fish style.
+The =help= builtin prints the built-in manual (=help substitution= etc.);
+=docs/guide.org= is the long form, including login shell setup.
 
 * Not yet
 

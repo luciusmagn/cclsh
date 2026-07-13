@@ -134,6 +134,183 @@
                (cclsh::line-editor--accept-completion "source/")))
 
 
+;;;; -- Implicit directory commands --
+
+(let* ((root
+         (format nil "/tmp/cclsh-check-implicit-cd-~d/"
+                 (ccl:external-call "getpid" :int)))
+       (child         (concatenate 'string root "implicit-child/"))
+       (spaced        (concatenate 'string root "implicit-space dir/"))
+       (old-directory (ccl:current-directory))
+       (old-defaults  *default-pathname-defaults*)
+       (old-pwd       (cclsh:getenv "PWD"))
+       (old-oldpwd    (cclsh:getenv "OLDPWD"))
+       (old-home      (cclsh:getenv "HOME"))
+       (variable      "CCLSH_CHECK_IMPLICIT_DIR")
+       (old-variable  (cclsh:getenv variable)))
+  (flet ((current-directory-name ()
+           (cclsh::directory-namestring-clean (ccl:current-directory)))
+         (restore-environment (name value)
+           (if value
+               (cclsh:setenv name value)
+               (cclsh::unsetenv name))))
+    (unwind-protect
+        (let ((*package* (find-package '#:cclsh-user))
+              (*standard-output* (make-broadcast-stream))
+              (*error-output* (make-broadcast-stream)))
+          (ensure-directories-exist
+           (concatenate 'string child ".keep"))
+          (ensure-directories-exist
+           (concatenate 'string spaced ".keep"))
+          (ensure-directories-exist
+           (concatenate 'string root "rehash/.keep"))
+          (ensure-directories-exist
+           (concatenate 'string root "true/.keep"))
+          (check-write-utf8-file
+           (concatenate 'string root "implicit-plain") "plain")
+          (cclsh:cd root)
+
+          (cclsh:cd child)
+          (check-equal ".. changes to the parent directory"
+                       0
+                       (cclsh::dispatch-line ".."))
+          (check-equal ".. changes the process directory"
+                       (string-right-trim "/" root)
+                       (current-directory-name))
+          (check-equal "implicit cd updates PWD"
+                       (string-right-trim "/" root)
+                       (cclsh:getenv "PWD"))
+          (check-equal "implicit cd updates OLDPWD"
+                       (string-right-trim "/" child)
+                       (cclsh:getenv "OLDPWD"))
+
+          (check-equal "./ directory changes implicitly"
+                       0
+                       (cclsh::dispatch-line "./implicit-child"))
+          (check-equal "./ directory becomes current"
+                       (string-right-trim "/" child)
+                       (current-directory-name))
+          (cclsh:cd root)
+          (check-equal "trailing slash directory changes implicitly"
+                       0
+                       (cclsh::dispatch-line "implicit-child/"))
+          (check-equal "trailing slash directory becomes current"
+                       (string-right-trim "/" child)
+                       (current-directory-name))
+          (cclsh:cd root)
+          (check-equal "absolute directory changes implicitly"
+                       0
+                       (cclsh::dispatch-line
+                        (string-right-trim "/" child)))
+          (check-equal "absolute directory becomes current"
+                       (string-right-trim "/" child)
+                       (current-directory-name))
+          (cclsh:cd root)
+          (cclsh:setenv "HOME" (string-right-trim "/" root))
+          (check-equal "tilde directory changes implicitly"
+                       0
+                       (cclsh::dispatch-line "~/implicit-child"))
+          (check-equal "tilde directory becomes current"
+                       (string-right-trim "/" child)
+                       (current-directory-name))
+          (cclsh:cd root)
+          (cclsh:setenv variable (string-right-trim "/" child))
+          (check-equal "variable directory changes implicitly"
+                       0
+                       (cclsh::dispatch-line
+                        "$CCLSH_CHECK_IMPLICIT_DIR"))
+          (check-equal "variable directory becomes current"
+                       (string-right-trim "/" child)
+                       (current-directory-name))
+          (cclsh:cd root)
+          (check-equal "singleton directory glob changes implicitly"
+                       0
+                       (cclsh::dispatch-line "./implicit-chil?"))
+          (check-equal "singleton glob directory becomes current"
+                       (string-right-trim "/" child)
+                       (current-directory-name))
+          (cclsh:cd root)
+          (check-equal "quoted directory changes implicitly"
+                       0
+                       (cclsh::dispatch-line "'implicit-space dir/'"))
+          (check-equal "quoted directory becomes current"
+                       (string-right-trim "/" spaced)
+                       (current-directory-name))
+
+          (cclsh:cd root)
+          (check-equal "bare directory remains a command lookup"
+                       127
+                       (cclsh::dispatch-line "implicit-child"))
+          (check-equal "bare directory does not change directory"
+                       (string-right-trim "/" root)
+                       (current-directory-name))
+          (check-equal "implicit directory rejects arguments"
+                       127
+                       (cclsh::dispatch-line "implicit-child/ extra"))
+          (check-equal "directory arguments do not change directory"
+                       (string-right-trim "/" root)
+                       (current-directory-name))
+          (check-equal "implicit directory rejects backgrounding"
+                       1
+                       (cclsh::dispatch-line "implicit-child/ &"))
+          (check-equal "background rejection does not change directory"
+                       (string-right-trim "/" root)
+                       (current-directory-name))
+          (check-equal "builtin wins over a same-named directory"
+                       0
+                       (cclsh::dispatch-line "rehash"))
+          (check-equal "builtin precedence keeps the directory"
+                       (string-right-trim "/" root)
+                       (current-directory-name))
+          (check-equal "external wins over a same-named directory"
+                       0
+                       (cclsh::dispatch-line "true"))
+          (check-equal "external precedence keeps the directory"
+                       (string-right-trim "/" root)
+                       (current-directory-name))
+
+          (check-equal "implicit directory highlights like cd"
+                       ':cyan
+                       (cclsh::highlight-command-name
+                        "implicit-child/" t))
+          (check-equal "bare directory remains unknown highlighting"
+                       ':red
+                       (cclsh::highlight-command-name
+                        "implicit-child" t))
+          (check-equal "directory with arguments remains unknown"
+                       ':red
+                       (cclsh::highlight-command-name
+                        "implicit-child/" nil))
+          (check-equal "multi-match directory glob remains unknown"
+                       ':red
+                       (cclsh::highlight-command-name "./implicit-*" t))
+          (multiple-value-bind (start candidates displays)
+              (cclsh::complete-line "implicit-" 9)
+            (declare (ignore displays))
+            (check-equal "command-position directory completion start"
+                         0 start)
+            (check-equal "command-position completion includes directory"
+                         t
+                         (not (null
+                               (member "implicit-child/" candidates
+                                       :test #'string=))))
+            (check-equal "command-position completion excludes plain file"
+                         nil
+                         (member "implicit-plain" candidates
+                                 :test #'string=))))
+      (ignore-errors
+        (setf (ccl:current-directory) old-directory)
+        (setf *default-pathname-defaults* old-defaults))
+      (restore-environment "PWD" old-pwd)
+      (restore-environment "OLDPWD" old-oldpwd)
+      (restore-environment "HOME" old-home)
+      (restore-environment variable old-variable)
+      (ignore-errors
+        (uiop:delete-directory-tree root
+                                    :validate t
+                                    :if-does-not-exist ':ignore)))))
+
+
 ;;;; -- History --
 
 (let* ((multiline (format nil "echo one~%echo two"))

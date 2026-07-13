@@ -156,6 +156,36 @@
   (let ((found (ignore-errors (probe-file path))))
     (and found (pathname-directory-form-p found) t)))
 
+(defun implicit-directory-path-p (path)
+  "True when PATH has the explicit shape required for an implicit cd.
+
+Like fish, cclsh accepts .., absolute paths, paths beginning with ./ or ../,
+and paths ending in a slash. A bare directory name remains a command name
+unless completion adds its trailing slash."
+  (let ((length (length path)))
+    (and (plusp length)
+         (or (string= path "..")
+             (char= (char path 0) #\/)
+             (and (>= length 2)
+                  (char= (char path 0) #\.)
+                  (char= (char path 1) #\/))
+             (and (>= length 3)
+                  (char= (char path 0) #\.)
+                  (char= (char path 1) #\.)
+                  (char= (char path 2) #\/))
+             (char= (char path (1- length)) #\/)))))
+
+(defun implicit-directory-path (words)
+  "Return WORDS' sole explicit directory path, or NIL.
+
+Command expansion may turn one source word into several glob matches, so an
+implicit directory change is safe only when the final command has one word."
+  (when (and (consp words)
+             (null (rest words))
+             (implicit-directory-path-p (first words))
+             (directory-exists-p (first words)))
+    (first words)))
+
 (defun directory-entry-names (directory)
   "List the entry names in DIRECTORY (a string; empty means the current
    directory). Returns (values file-names directory-names)."

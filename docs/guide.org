@@ -44,18 +44,26 @@ When you press Enter, cclsh looks at the line:
    evaluated as Lisp in the =cclsh-user= package. Values print one per
    line, REPL style.
 2. Otherwise it is a command line. The first word resolves in order:
-   - a word containing =/= is executed as a file path directly,
+   - an existing non-directory word containing =/= runs as a file path
+     directly,
    - a symbol in the current package whose value is a =command=
      instance runs as a builtin,
    - otherwise the word is looked up in =PATH=.
-3. When nothing matches and the line is a single word that names a
+3. When command resolution misses and the expanded line is one explicit
+   directory path, cclsh changes into it as if =cd= had been used. =..=,
+   absolute paths, paths beginning =./= or =../=, expanded =~/...= paths and
+   names ending in =/= qualify. A bare directory name does not, and an
+   implicit directory change cannot take arguments or be backgrounded.
+   Builtins and executables win before this check. Command-position Tab
+   completion adds the trailing slash for you.
+4. When nothing matches and the line is a single word that names a
    bound variable or keyword, or is a number literal, it evaluates
    REPL style instead: after =(defvar *balls* 'hi)=, typing =*balls*=
    prints =HI=. Real commands always win; the fallback only runs once
    builtin and =PATH= resolution both miss, and it reads the raw word,
    so glob characters in earmuffed names cannot mangle it. The
    highlighter shows such words magenta.
-4. Otherwise a red =command not found= and status 127.
+5. Otherwise a red =command not found= and status 127.
 
 Because only symbols bound to =command= instances count, ordinary Lisp
 bindings never shadow programs: typing =time= runs =/bin/time=, not the
@@ -352,14 +360,15 @@ policy through its callbacks.
 (*) Shift-Enter requires a terminal that reports modified Enter through CSI-u
 or modifyOtherKeys sequences.
 
-Tab completes command names in command position (=PATH= executables
-plus defined commands), file paths elsewhere (directories complete
-with a trailing =/=, spaces get escaped), and Lisp symbols in Lisp
-mode, including =:keywords=. A unique match inserts itself, several
-matches extend to their common prefix, and pressing Tab again opens a
-width-measured candidate grid. Arrow keys navigate the grid and Tab cycles
-candidates. Escape restores the original prefix. Other input keeps the
-selected candidate before applying that input.
+At a slash-free command position, Tab completes command names (=PATH=
+executables plus defined commands) and directories. It completes file paths
+after a slash and in arguments, and Lisp symbols in Lisp mode, including
+=:keywords=. Directories complete with a trailing =/=, which makes a
+command-position directory ready for implicit =cd=, and spaces get escaped. A
+unique match inserts itself, several matches extend to their common prefix,
+and pressing Tab again opens a width-measured candidate grid. Arrow keys
+navigate the grid and Tab cycles candidates. Escape restores the original
+prefix. Other input keeps the selected candidate before applying that input.
 
 The newest history entry beginning with the current input appears in
 dim text after the cursor. Press Right or C-f at the end of the input
@@ -367,14 +376,13 @@ to accept the whole suggestion. Moving within existing input keeps the
 ordinary one-character Right and C-f behavior.
 
 Input highlights as you type with the standard 16 terminal colors.
-In command mode: external commands green, builtins cyan, unknown
-commands red, lone bound variables magenta, strings yellow, numbers
-cyan, =$VAR= references magenta, glob wildcards and a leading =~=
-bright magenta, backslash escapes dim. In Lisp mode: known operators
-in head position blue (a typo like =defparam= never lights up),
-keywords and quotes magenta, numbers, characters and constants cyan,
-bound =*earmuffed*= specials magenta, strings yellow, comments and
-parens dim.
+In command mode: external commands green, builtins and valid implicit
+directory paths cyan, unknown commands red, lone bound variables magenta,
+strings yellow, numbers cyan, =$VAR= references magenta, glob wildcards and a
+leading =~= bright magenta, backslash escapes dim. In Lisp mode: known
+operators in head position blue (a typo like =defparam= never lights up),
+keywords and quotes magenta, numbers, characters and constants cyan, bound
+=*earmuffed*= specials magenta, strings yellow, comments and parens dim.
 
 * History
 

@@ -90,6 +90,18 @@
   (force-output *error-output*)
   (values))
 
+(defun dispatch--implicit-directory-status (words background-p)
+  "Change to a sole directory in WORDS, or return NIL when not applicable.
+Reject a background change like any other builtin command."
+  (let ((directory (implicit-directory-path words)))
+    (when directory
+      (if background-p
+          (progn
+            (dispatch--report-red
+             "cclsh: cannot background an implicit directory change")
+            1)
+          (cd directory)))))
+
 (defun dispatch-command (line)
   "Execute LINE as a shell command line. Returns an exit status. An
    unescaped trailing & launches the command as a background job."
@@ -123,7 +135,9 @@
                             (command-execute-background target (rest words))
                             (command-execute-external target (rest words))))
                        (:unknown
-                        (or (and (not background)
+                        (or (dispatch--implicit-directory-status
+                             words background)
+                            (and (not background)
                                  (dispatch--lone-value-status line))
                             (error 'command-not-found-error
                                    :name (first words)))))))))))

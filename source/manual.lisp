@@ -13,20 +13,28 @@
 package. Anything else is a command line whose first word resolves in
 order:
 
-  1. a word containing / runs as a file path directly
+  1. an existing non-directory word containing / runs directly
   2. a symbol whose value is a COMMAND instance runs as a builtin
   3. the word is looked up in PATH
-  4. a lone word naming a bound variable or keyword, or a number
+  4. one explicit directory path changes directory as if by cd
+  5. a lone word naming a bound variable or keyword, or a number
      literal, evaluates REPL style
-  5. otherwise: command not found, status 127
+  6. otherwise: command not found, status 127
 
   ./configure              a path, runs directly
   cd src                   cd is bound to a COMMAND, a builtin
   ls -la                   found in PATH
+  ..                       changes to the parent directory
+  src/                     changes to the src directory
   (+ 1 2)                  starts with (, evaluates as Lisp
   *last-status*            lone bound variable, prints its value
   pi                       3.141592653589793D0
   42                       numbers print themselves
+
+Implicit cd accepts .., absolute paths, paths beginning ./ or ../,
+expanded ~/ paths and names ending in /. A bare name remains a command
+lookup. The path must be the only word and cannot be backgrounded.
+Builtins and executables always win first.
 
 PATH lookups are cached for highlighting, but execution retries a
 cached miss with a fresh scan, so freshly installed programs work
@@ -199,9 +207,11 @@ jobs, fg and bg are ordinary functions too: (fg 1) resumes job 1 from
 Lisp.")
 
     ("editing" "keys, completion and colors"
-     "Tab completes command names in command position, file paths
-elsewhere (directories end with /, special characters get escaped) and
-Lisp symbols in Lisp mode or inside a substitution:
+     "At a slash-free command position, Tab completes command names and
+directories. It completes file paths after a slash and in arguments,
+and Lisp symbols in Lisp mode or inside a substitution. Directories end
+with /, making command-position matches ready for implicit cd, and
+special characters get escaped:
 
   git ch<Tab>              checkout and friends
   ls src/ma<Tab>           src/main.lisp
@@ -222,11 +232,11 @@ C-f at the end accepts it.
   Alt-Enter            insert a newline without submitting
   Shift-Enter          same when the terminal reports modified Enter
 
-Colors: external commands green, builtins cyan, unknown red, lone
-bound variables magenta, strings yellow, numbers cyan, $VAR magenta,
-globs and ~ bright magenta. In Lisp: known operators in head position
-blue (a typo never lights up), keywords magenta, constants cyan,
-bound *specials* magenta.")
+Colors: external commands green, builtins and valid implicit directory
+paths cyan, unknown red, lone bound variables magenta, strings yellow,
+numbers cyan, $VAR magenta, globs and ~ bright magenta. In Lisp: known
+operators in head position blue (a typo never lights up), keywords
+magenta, constants cyan, bound *specials* magenta.")
 
     ("history" "what is remembered and where"
      "History persists in ~/.config/cclsh/history (XDG_CONFIG_HOME is

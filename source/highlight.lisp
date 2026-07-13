@@ -25,18 +25,23 @@
 
 (defun highlight-command-name (word lone-p)
   "Return the color keyword for a command WORD by how it resolves:
-   builtins cyan, external programs green, unknown commands red. A
-   lone word that would evaluate as Lisp (a bound variable or number)
-   is magenta."
+   builtins and implicit directories cyan, external programs green, unknown
+   commands red. A lone word that would evaluate as Lisp (a bound variable or
+   number) is magenta."
   (multiple-value-bind (kind target)
       (command-resolve (escape-remove (tilde-expand word)))
     (declare (ignore target))
     (ecase kind
       (:builtin  ':cyan)
       (:external ':green)
-      (:unknown  (if (and lone-p (word-evaluates-alone-p word))
-                     ':magenta
-                     ':red)))))
+      (:unknown
+       (cond ((and lone-p
+                   (implicit-directory-path (word-expand word)))
+              ':cyan)
+             ((and lone-p (word-evaluates-alone-p word))
+              ':magenta)
+             (t
+              ':red))))))
 
 (defun highlight--number-word-p (text)
   "True when TEXT is a plain integer or decimal literal."

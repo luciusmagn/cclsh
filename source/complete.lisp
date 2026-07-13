@@ -203,6 +203,32 @@
       (values (mapcar #'first sorted)
               (mapcar #'rest sorted)))))
 
+(defun completion--command-heads (prefix)
+  "Command and directory candidates matching command-position PREFIX.
+
+Directories retain the trailing slash that makes them explicit implicit-cd
+paths. Ordinary non-executable files are excluded."
+  (multiple-value-bind (commands command-displays)
+      (completion--commands prefix)
+    (multiple-value-bind (paths path-displays)
+        (completion--files prefix)
+      (let* ((command-pairs (mapcar #'cons commands command-displays))
+             (directory-pairs
+               (loop for path in paths
+                     for display in path-displays
+                     when (and (plusp (length path))
+                               (char= (char path (1- (length path))) #\/))
+                       collect (cons path display)))
+             (pairs
+               (sort (remove-duplicates
+                      (append command-pairs directory-pairs)
+                      :test #'string=
+                      :key #'car)
+                     #'string<
+                     :key #'cdr)))
+        (values (mapcar #'car pairs)
+                (mapcar #'cdr pairs))))))
+
 (defun completion--symbols (prefix)
   "Lisp symbol candidates matching PREFIX, downcased. Keyword prefixes
    complete against the keyword package."
@@ -261,7 +287,7 @@
                        (values start candidates displays)))))))))
 
 (defun completion--commands-with-start (start prefix)
-  "Command candidates wrapped with their replacement START."
+  "Command and directory candidates wrapped with replacement START."
   (multiple-value-bind (candidates displays)
-      (completion--commands prefix)
+      (completion--command-heads prefix)
     (values start candidates displays)))
