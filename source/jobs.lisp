@@ -395,6 +395,40 @@
       (force-output *error-output*))
     0))
 
+;;; Exit protection
+
+(defvar *jobs-exit-warned* nil
+  "True right after the stopped jobs warning was printed, letting the
+   directly following exit attempt proceed.")
+
+(defvar *jobs-exit-confirmed* nil
+  "Bound around each dispatched line and end-of-file to the warning
+   state the attempt starts under, so exit twice in a row goes
+   through while any other command rearms the warning.")
+
+(defun jobs-stopped-p ()
+  "True when the job table holds a stopped job."
+  (and (find-if (lambda (job)
+                  (eq (job-refresh job) ':stopped))
+                *jobs*)
+       t))
+
+(defun jobs-exit-blocked-p ()
+  "True when leaving the shell should be refused because of stopped
+   jobs. Prints the warning and remembers it so the next attempt is
+   allowed through."
+  (cond ((not (jobs-stopped-p))
+         nil)
+        (*jobs-exit-confirmed*
+         nil)
+        (t
+         (format *error-output* "~a~%"
+                 (ansi-colorize "cclsh: there are stopped jobs" ':red))
+         (force-output *error-output*)
+         (setf *jobs-exit-warned* t)
+         t)))
+
+
 ;;; Job builtins
 
 (defun jobs-count ()

@@ -130,7 +130,11 @@
                         (shell-read-plain))
                   (ecase kind
                     (:eof
-                     (quit *last-status*))
+                     (let ((*jobs-exit-confirmed*
+                             (shiftf *jobs-exit-warned* nil)))
+                       (if (jobs-exit-blocked-p)
+                           (setf *last-status* 1)
+                           (quit *last-status*))))
                     (:abort
                      (setf *last-status* 130))
                     (:line

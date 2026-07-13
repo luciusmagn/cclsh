@@ -43,17 +43,20 @@
     0))
 
 (defcommand exit (&optional status)
-  "Exit the shell. STATUS defaults to the last command's status."
-  (let ((code (cond ((null status)
-                     *last-status*)
-                    ((integerp status)
-                     status)
-                    (t
-                     (or (parse-integer (princ-to-string status)
-                                        :junk-allowed t)
-                         0)))))
-    (terminal-restore)
-    (quit code)))
+  "Exit the shell. STATUS defaults to the last command's status. With
+   stopped jobs the first exit only warns; exit again to leave anyway."
+  (if (jobs-exit-blocked-p)
+      1
+      (let ((code (cond ((null status)
+                         *last-status*)
+                        ((integerp status)
+                         status)
+                        (t
+                         (or (parse-integer (princ-to-string status)
+                                            :junk-allowed t)
+                             0)))))
+        (terminal-restore)
+        (quit code))))
 
 (defcommand rehash ()
   "Forget cached PATH lookups and completion candidates."
