@@ -40,25 +40,81 @@
     names))
 
 (defparameter *completion-escaped-characters*
-  (list #\space #\tab #\newline #\return #\" #\' #\\ #\$ #\* #\? #\()
+  (list #\space #\" #\' #\\ #\$ #\* #\? #\( #\) #\&)
   "Characters that would split or expand a completed word: whitespace,
-   quotes, backslashes, variable references, glob wildcards and the
-   Lisp substitution paren.")
+   quotes, backslashes, variable references, glob wildcards, Lisp
+   substitution parens and the background marker.")
 
-(defun completion--escape (text)
+(defun completion--terminal-control-p (char)
+  "True when CHAR is a C0, DEL or C1 terminal control character."
+  (let ((code (char-code char)))
+    (or (< code 32)
+        (= code 127)
+        (<= 128 code 159))))
+
+(defun completion--write-controlled-text (text stream)
+  "Write a command expression for TEXT to STREAM without emitting any
+   control characters. The expression expands back to the exact string."
+  (format stream "$((map 'string #'code-char '~s))"
+          (map 'list #'char-code text)))
+
+(defun completion--escape (text &key (escape-leading-tilde t))
   "Backslash escape the special characters in TEXT so it survives
-   being typed back into a command line."
+   being typed back into a command line. Terminal controls are written
+   as Lisp substitutions so neither the edit buffer nor its rendering
+   contains the raw control character. ESCAPE-LEADING-TILDE protects a
+   literal command or filename; file paths under ~/ leave it active."
   (with-output-to-string (escaped)
+    (cond ((and (not escape-leading-tilde)
+                (string-prefix-p "~/" text)
+                (find-if #'completion--terminal-control-p text))
+           (write-string "~/" escaped)
+           (completion--write-controlled-text (subseq text 2) escaped))
+          ((find-if #'completion--terminal-control-p text)
+           (completion--write-controlled-text text escaped))
+          (t
+           (loop for char across text
+                 for index from 0
+                 do (when (or (member char *completion-escaped-characters*)
+                              (and escape-leading-tilde
+                                   (zerop index)
+                                   (char= char #\~)))
+                      (write-char #\\ escaped))
+                    (write-char char escaped))))))
+
+(defun completion--display (text)
+  "Render TEXT without terminal controls, retaining a recognizable name."
+  (with-output-to-string (display)
     (loop for char across text
-          do (when (member char *completion-escaped-characters*)
-               (write-char #\\ escaped))
-             (write-char char escaped))))
+          for code = (char-code char)
+          do (cond ((< code 32)
+                    (write-char #\^ display)
+                    (write-char (code-char (+ code 64)) display))
+                   ((= code 127)
+                    (write-string "^?" display))
+                   ((<= 128 code 159)
+                    (format display "\\u~4,'0x" code))
+                   (t
+                    (write-char char display))))))
 
 (defun completion--common-prefix (candidates)
-  "Longest common prefix of the CANDIDATES."
-  (reduce (lambda (first second)
-            (subseq first 0 (or (mismatch first second) (length first))))
-          candidates))
+  "Longest safely insertable common prefix of the CANDIDATES."
+  (let* ((prefix
+           (reduce (lambda (first second)
+                     (subseq first 0
+                             (or (mismatch first second) (length first))))
+                   candidates))
+         (control-expression
+           (search "$((map 'string #'code-char '" prefix)))
+    ;; A partial generated expression cannot be executed, and a lone
+    ;; backslash would escape whatever the user types next.
+    (when control-expression
+      (setf prefix (subseq prefix 0 control-expression)))
+    (when (oddp (loop for index downfrom (1- (length prefix)) to 0
+                      while (char= (char prefix index) #\\)
+                      count 1))
+      (setf prefix (subseq prefix 0 (1- (length prefix)))))
+    prefix))
 
 
 ;;; Span detection
@@ -101,14 +157,16 @@
 (defun completion--commands (prefix)
   "Command name candidates matching PREFIX.
    Returns (values candidates displays)."
-  (let ((matches (sort (remove-duplicates
-                        (remove-if-not (lambda (name)
-                                         (string-prefix-p prefix name))
-                                       (append (shell-command-names)
-                                               (path-command-names)))
-                        :test #'string=)
-                       #'string<)))
-    (values matches matches)))
+  (let* ((clean   (escape-remove prefix))
+         (matches (sort (remove-duplicates
+                         (remove-if-not (lambda (name)
+                                          (string-prefix-p clean name))
+                                        (append (shell-command-names)
+                                                (path-command-names)))
+                         :test #'string=)
+                        #'string<)))
+    (values (mapcar #'completion--escape matches)
+            (mapcar #'completion--display matches))))
 
 (defun completion--files (prefix)
   "File path candidates matching PREFIX. Directories complete with a
@@ -127,15 +185,13 @@
                             (string-prefix-p "." base)))
                (let* ((tail    (if directory-p "/" ""))
                       (escaped (completion--escape
-                                (concatenate 'string directory-part name)))
-                      ;; A bare name starting with ~ needs a guard so a
-                      ;; file literally named ~ cannot tilde-expand.
-                      (guarded (if (and (string= directory-part "")
-                                        (char= (char name 0) #\~))
-                                   (concatenate 'string "\\" escaped)
-                                   escaped)))
-                 (push (cons (concatenate 'string guarded tail)
-                             (concatenate 'string name tail))
+                                (concatenate 'string directory-part name)
+                                :escape-leading-tilde
+                                (string= directory-part ""))))
+                 (push (cons (concatenate 'string escaped tail)
+                             (concatenate 'string
+                                          (completion--display name)
+                                          tail))
                        pairs)))))
       (multiple-value-bind (files subdirectories)
           (directory-entry-names list-root)

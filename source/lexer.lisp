@@ -32,6 +32,79 @@
                    line :start start)
       (length line)))
 
+(defun lisp-symbol-boundary-p (char)
+  "True when CHAR terminates a Lisp atom."
+  (or (whitespace-char-p char)
+      (and (member char '(#\( #\) #\" #\; #\' #\` #\,)) t)))
+
+(defun lexer--lisp-string-end (line start)
+  "Return the end and closure status of the string at START in LINE."
+  (let ((index  (1+ start))
+        (length (length line)))
+    (loop while (< index length)
+          do (let ((char (char line index)))
+               (cond ((char= char #\\)
+                      (incf index (if (< (1+ index) length) 2 1)))
+                     ((char= char #\")
+                      (return-from lexer--lisp-string-end
+                        (values (1+ index) t)))
+                     (t
+                      (incf index)))))
+    (values length nil)))
+
+(defun lexer--lisp-multiple-escape-end (line start)
+  "Return the end and closure status of the |...| escape at START."
+  (let ((index  (1+ start))
+        (length (length line)))
+    (loop while (< index length)
+          do (let ((char (char line index)))
+               (cond ((char= char #\\)
+                      (incf index (if (< (1+ index) length) 2 1)))
+                     ((char= char #\|)
+                      (return-from lexer--lisp-multiple-escape-end
+                        (values (1+ index) t)))
+                     (t
+                      (incf index)))))
+    (values length nil)))
+
+(defun lexer--lisp-block-comment-end (line start)
+  "Return the end and closure status of the nested #|...|# comment at
+   START."
+  (let ((index  (+ start 2))
+        (length (length line))
+        (depth  1))
+    (loop while (< index length)
+          do (cond ((and (< (1+ index) length)
+                         (char= (char line index) #\#)
+                         (char= (char line (1+ index)) #\|))
+                    (incf depth)
+                    (incf index 2))
+                   ((and (< (1+ index) length)
+                         (char= (char line index) #\|)
+                         (char= (char line (1+ index)) #\#))
+                    (decf depth)
+                    (incf index 2)
+                    (when (zerop depth)
+                      (return-from lexer--lisp-block-comment-end
+                        (values index t))))
+                   (t
+                    (incf index))))
+    (values length nil)))
+
+(defun lexer--lisp-character-end (line start)
+  "Return the end of the #\\ character literal at START in LINE."
+  (let ((index  (+ start 2))
+        (length (length line)))
+    (when (< index length)
+      (let ((first (char line index)))
+        (incf index)
+        (when (alphanumericp first)
+          (loop while (and (< index length)
+                           (not (lisp-symbol-boundary-p
+                                 (char line index))))
+                do (incf index)))))
+    index))
+
 
 ;;; Command mode
 
@@ -84,32 +157,34 @@
                (let ((depth 1))
                  (loop while (and (< index length) (plusp depth))
                        do (let ((char (char line index)))
-                            (cond ((char= char #\()
+                            (cond ((char= char #\\)
+                                   (incf index
+                                         (if (< (1+ index) length) 2 1)))
+                                  ((char= char #\|)
+                                   (setf index
+                                         (lexer--lisp-multiple-escape-end
+                                          line index)))
+                                  ((char= char #\")
+                                   (setf index
+                                         (lexer--lisp-string-end line index)))
+                                  ((and (char= char #\#)
+                                        (< (1+ index) length)
+                                        (char= (char line (1+ index)) #\|))
+                                   (setf index
+                                         (lexer--lisp-block-comment-end
+                                          line index)))
+                                  ((and (char= char #\#)
+                                        (< (1+ index) length)
+                                        (char= (char line (1+ index)) #\\))
+                                   (setf index
+                                         (lexer--lisp-character-end
+                                          line index)))
+                                  ((char= char #\()
                                    (incf depth)
                                    (incf index))
                                   ((char= char #\))
                                    (decf depth)
                                    (incf index))
-                                  ((char= char #\")
-                                   (incf index)
-                                   (loop while (< index length)
-                                         do (let ((inner (char line index)))
-                                              (cond ((char= inner #\\)
-                                                     (incf index
-                                                           (if (< (1+ index) length)
-                                                               2
-                                                               1)))
-                                                    ((char= inner #\")
-                                                     (incf index)
-                                                     (return))
-                                                    (t
-                                                     (incf index))))))
-                                  ((and (char= char #\#)
-                                        (< (1+ index) length)
-                                        (char= (char line (1+ index)) #\\))
-                                   (incf index 2)
-                                   (when (< index length)
-                                     (incf index)))
                                   ((char= char #\;)
                                    (setf index
                                          (lexer--line-comment-end line
@@ -182,11 +257,6 @@
 
 ;;; Lisp mode
 
-(defun lisp-symbol-boundary-p (char)
-  "True when CHAR terminates a Lisp atom."
-  (or (whitespace-char-p char)
-      (and (member char '(#\( #\) #\" #\; #\' #\` #\,)) t)))
-
 (defun lisp-number-text-p (text)
   "Crude check whether TEXT looks like a number literal."
   (and (plusp (length text))
@@ -198,8 +268,8 @@
 
 (defun lex-lisp-line (line)
   "Lex LINE as Lisp source into highlight tokens.
-   Returns (values tokens open) where OPEN is NIL, :STRING or :COMMENT
-   depending on whether the input ends inside an open construct."
+   Returns (values tokens open) where OPEN identifies an unfinished
+   string, comment or escaped symbol."
   (let ((tokens nil)
         (index  0)
         (length (length line))
@@ -208,47 +278,50 @@
                (push (token-make type start end) tokens))
 
              (scan-string (start)
-               (incf index)
-               (loop while (< index length)
-                     do (let ((char (char line index)))
-                          (cond ((char= char #\\)
-                                 (incf index (if (< (1+ index) length) 2 1)))
-                                ((char= char #\")
-                                 (incf index)
-                                 (emit ':string start index)
-                                 (return-from scan-string))
-                                (t
-                                 (incf index)))))
-               (setf open ':string)
-               (emit ':string start index))
+               (multiple-value-bind (end closed)
+                   (lexer--lisp-string-end line start)
+                 (setf index end)
+                 (unless closed
+                   (setf open ':string))
+                 (emit ':string start index)))
 
              (scan-block-comment (start)
-               (incf index 2)
-               (loop while (< index length)
-                     do (if (and (char= (char line index) #\|)
-                                 (< (1+ index) length)
-                                 (char= (char line (1+ index)) #\#))
-                            (progn
-                              (incf index 2)
-                              (emit ':comment start index)
-                              (return-from scan-block-comment))
-                            (incf index)))
-               (setf open ':comment)
-               (emit ':comment start index))
+               (multiple-value-bind (end closed)
+                   (lexer--lisp-block-comment-end line start)
+                 (setf index end)
+                 (unless closed
+                   (setf open ':comment))
+                 (emit ':comment start index)))
 
              (scan-character (start)
-               (incf index 2)
-               (when (< index length)
-                 (incf index))
-               (loop while (and (< index length)
-                                (alphanumericp (char line index)))
-                     do (incf index))
+               (setf index (lexer--lisp-character-end line start))
                (emit ':character start index))
 
              (scan-atom (start)
-               (loop while (and (< index length)
-                                (not (lisp-symbol-boundary-p (char line index))))
-                     do (incf index))
+               (loop while (< index length)
+                     do (let ((char (char line index)))
+                          (cond ((lisp-symbol-boundary-p char)
+                                 (return))
+                                ((and (char= char #\#)
+                                      (< (1+ index) length)
+                                      (member (char line (1+ index))
+                                              '(#\| #\\)))
+                                 (return))
+                                ((char= char #\\)
+                                 (if (< (1+ index) length)
+                                     (incf index 2)
+                                     (progn
+                                       (incf index)
+                                       (setf open ':symbol))))
+                                ((char= char #\|)
+                                 (multiple-value-bind (end closed)
+                                     (lexer--lisp-multiple-escape-end
+                                      line index)
+                                   (setf index end)
+                                   (unless closed
+                                     (setf open ':symbol))))
+                                (t
+                                 (incf index)))))
                (let ((text (subseq line start index)))
                  (emit (cond ((char= (char text 0) #\:)
                               ':keyword)
@@ -297,8 +370,7 @@
       (values (nreverse tokens) open))))
 
 (defun lisp-line-open-p (line)
-  "True when LINE is an unfinished Lisp form: unbalanced open parens or
-   an open string or block comment."
+  "True when LINE has unbalanced open parens or an open lexical construct."
   (multiple-value-bind (tokens open)
       (lex-lisp-line line)
     (or (not (null open))

@@ -36,6 +36,64 @@
                lisp-line
                (cclsh::ansi-strip (cclsh::highlight-line lisp-line))))
 
+(let ((complete
+        '("(list #| ignored ) #| nested ( |# |# 1)"
+          "(list |symbol with ) ; and hash text| 1)"
+          "(list |escaped \\| and )| 1)"
+          "(list #\\) 1)"
+          "(list foo\\) 1)"
+          "echo (list #| ignored ) |# #\\) |symbol )| foo\\))"))
+      (open
+        '("(list #| unfinished"
+          "(list |unfinished"
+          "echo (list #| unfinished"
+          "echo (list |unfinished")))
+  (dolist (line complete)
+    (check-equal (format nil "complete reader syntax in ~s" line)
+                 nil
+                 (cclsh::input-line-open-p line))
+    (check-equal (format nil "highlight preserves reader syntax in ~s" line)
+                 line
+                 (cclsh::ansi-strip (cclsh::highlight-line line))))
+  (dolist (line open)
+    (check-equal (format nil "unfinished reader syntax in ~s" line)
+                 t
+                 (not (null (cclsh::input-line-open-p line))))))
+
+
+;;;; -- Completion safety --
+
+(let ((*package* (find-package '#:cclsh-user)))
+  (dolist (name '("odd name" "odd(name)" "odd&name" "odd\"name"
+                  "odd'name" "odd\\name" "odd$name" "odd*name"
+                  "odd?name" "~odd"))
+    (let ((escaped (cclsh::completion--escape name)))
+      (check-equal (format nil "completed command round-trip for ~s" name)
+                   (list name)
+                   (cclsh::command-line-words escaped))))
+  (let* ((name    (format nil "bell~c esc~c newline~% c1~c"
+                          (code-char 7) (code-char 27) (code-char 133)))
+         (escaped (cclsh::completion--escape name))
+         (display (cclsh::completion--display name)))
+    (check-equal "control-bearing completion round-trip"
+                 (list name)
+                 (cclsh::command-line-words escaped))
+    (check-equal "accepted completion has no terminal controls"
+                 nil
+                 (find-if #'cclsh::completion--terminal-control-p escaped))
+    (check-equal "completion display has no terminal controls"
+                 nil
+                 (find-if #'cclsh::completion--terminal-control-p display)))
+  (check-equal "common prefix never leaves a dangling escape"
+               "foo"
+               (cclsh::completion--common-prefix '("foo\\(" "foo\\)")))
+  (check-equal "common prefix never inserts a partial control expression"
+               ""
+               (cclsh::completion--common-prefix
+                (list (cclsh::completion--escape (format nil "a~%x"))
+                      (cclsh::completion--escape
+                       (format nil "a~cy" (code-char 27)))))))
+
 
 ;;;; -- History --
 
