@@ -93,29 +93,72 @@
 
 ;;; Rendering
 
+(defun editor--screen-position (text prompt-width columns
+                                &key (end (length text)))
+  "Screen position after TEXT through END, following a prompt of
+   PROMPT-WIDTH cells in a terminal with COLUMNS columns. Returns row,
+   column and whether an exact-width wrap still needs materializing."
+  (let ((row          (floor prompt-width columns))
+        (column       (mod prompt-width columns))
+        (pending-wrap (and (plusp prompt-width)
+                           (zerop (mod prompt-width columns)))))
+    (loop for index below end
+          for char = (char text index)
+          do (cond ((char= char #\newline)
+                    (if pending-wrap
+                        (setf pending-wrap nil)
+                        (incf row))
+                    (setf column 0))
+                   ((char= char #\return)
+                    (setf column 0)
+                    (setf pending-wrap nil))
+                   (t
+                    (when pending-wrap
+                      (setf pending-wrap nil))
+                    (incf column)
+                    (when (= column columns)
+                      (incf row)
+                      (setf column 0)
+                      (setf pending-wrap t))))
+          finally (return (values row column pending-wrap)))))
+
+(defun editor--write-display (text)
+  "Write display TEXT, following every newline with an explicit
+   carriage return so redraws do not depend on terminal output flags."
+  (loop for char across text
+        do (write-char char)
+        when (char= char #\newline)
+          do (write-char #\return))
+  (values))
+
 (defun editor--render (edit-prompt prompt-width buffer cursor columns
-                       previous-row)
+                       previous-row &key suggestion)
   "Redraw the edit line and place the cursor. PREVIOUS-ROW is the
-   wrapped row the cursor was left on by the previous render. Returns
-   the row the cursor now sits on."
-  (let* ((total         (+ prompt-width (length buffer)))
-         (exact-wrap    (and (plusp total) (zerop (mod total columns))))
-         (target        (+ prompt-width cursor))
-         (target-row    (floor target columns))
-         (target-column (mod target columns))
-         (end-row       (floor total columns)))
-    (write-string (ansi-cursor-up previous-row))
-    (write-char #\Return)
-    (write-string (ansi-clear-below))
-    (write-string edit-prompt)
-    (write-string (highlight-line buffer))
-    (when exact-wrap
-      (write-char #\Linefeed)
-      (write-char #\Return))
-    (write-string (ansi-cursor-up (- end-row target-row)))
-    (write-string (ansi-cursor-column target-column))
-    (force-output)
-    target-row))
+   wrapped row the cursor was left on by the previous render. SUGGESTION
+   is unaccepted text displayed after BUFFER. Returns the row the cursor
+   now sits on."
+  (let* ((suffix  (or suggestion ""))
+         (display (concatenate 'string buffer suffix)))
+    (multiple-value-bind (target-row target-column target-wrap)
+        (editor--screen-position buffer prompt-width columns :end cursor)
+      (declare (ignore target-wrap))
+      (multiple-value-bind (end-row end-column exact-wrap)
+          (editor--screen-position display prompt-width columns)
+        (declare (ignore end-column))
+        (write-string (ansi-cursor-up previous-row))
+        (write-char #\return)
+        (write-string (ansi-clear-below))
+        (write-string edit-prompt)
+        (editor--write-display (highlight-line buffer))
+        (when (plusp (length suffix))
+          (editor--write-display (ansi-colorize suffix ':bright-black)))
+        (when exact-wrap
+          (write-char #\linefeed)
+          (write-char #\return))
+        (write-string (ansi-cursor-up (- end-row target-row)))
+        (write-string (ansi-cursor-column target-column))
+        (force-output)
+        target-row))))
 
 (defun editor--finish (edit-prompt prompt-width buffer columns previous-row
                        &key marker)
@@ -143,8 +186,18 @@
     index))
 
 (defun editor--history-entry (history index)
-  "History entry at INDEX with newlines folded to spaces for editing."
-  (substitute #\space #\newline (aref history index)))
+  "History entry at INDEX, preserving its text exactly."
+  (aref history index))
+
+(defun editor--move-right (buffer cursor suggestion)
+  "Move right within BUFFER, or accept the full SUGGESTION when CURSOR
+   is already at the end. Returns (values buffer cursor)."
+  (cond ((< cursor (length buffer))
+         (values buffer (1+ cursor)))
+        (suggestion
+         (values suggestion (length suggestion)))
+        (t
+         (values buffer cursor))))
 
 
 ;;; Completion presentation
@@ -224,6 +277,7 @@
             (cursor        0)
             (history-index (fill-pointer history))
             (stash         "")
+            (suggestion    nil)
             (previous-row  0))
         (write-string preamble)
         (unwind-protect
@@ -237,9 +291,15 @@
                         (values line ':line)
                         (values nil ':eof)))))
               (loop
+                (setf suggestion
+                      (and (= cursor (length buffer))
+                           (history-suggestion buffer history)))
                 (setf previous-row
-                      (editor--render edit-prompt prompt-width buffer cursor
-                                      columns previous-row))
+                      (editor--render
+                       edit-prompt prompt-width buffer cursor columns
+                       previous-row
+                       :suggestion (and suggestion
+                                        (subseq suggestion cursor))))
                 (multiple-value-bind (key char)
                     (editor-read-key)
                   (case key
@@ -285,8 +345,8 @@
                      (when (plusp cursor)
                        (decf cursor)))
                     (:right
-                     (when (< cursor (length buffer))
-                       (incf cursor)))
+                     (multiple-value-setq (buffer cursor)
+                       (editor--move-right buffer cursor suggestion)))
                     (:home
                      (setf cursor 0))
                     (:end

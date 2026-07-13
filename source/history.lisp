@@ -1,6 +1,6 @@
 ;;;; -- History persistence --
 ;;;
-;;; History entries are stored one PRIN1ed string per line, so entries
+;;; History entries are stored one PRIN1ed string per entry, so entries
 ;;; containing newlines or quotes survive round-trips and loading is a
 ;;; plain READ loop with *READ-EVAL* disabled.
 
@@ -27,6 +27,17 @@
 (defun history-file ()
   "Return the path of the persistent history file."
   (concatenate 'string (config-directory) "history"))
+
+(defun history-suggestion (input &optional (history *history*))
+  "Newest entry in HISTORY that starts with nonempty INPUT and has
+   more text to suggest. Equal entries are skipped so an older, longer
+   command can still match."
+  (when (plusp (length input))
+    (loop for index downfrom (1- (fill-pointer history)) to 0
+          for entry = (aref history index)
+          when (and (> (length entry) (length input))
+                    (string= input entry :end2 (length input)))
+            return entry)))
 
 (defun history-load ()
   "Load persisted history into *HISTORY*. Unreadable content is

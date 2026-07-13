@@ -1,0 +1,11 @@
+#!/bin/sh
+# Run the cclsh regression checks in a fresh CCL image.
+set -e
+cd "$(dirname "$0")/.."
+
+if [ -z "${ASDF_OUTPUT_TRANSLATIONS:-}" ]; then
+    ASDF_OUTPUT_TRANSLATIONS="$PWD/:${TMPDIR:-/tmp}/cclsh-fasl/"
+    export ASDF_OUTPUT_TRANSLATIONS
+fi
+
+ccl -n -b -l tests/check.lisp

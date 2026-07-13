@@ -192,10 +192,12 @@ Lisp symbols in Lisp mode or inside a substitution:
   echo (*bal<Tab>          echo (*balls*
 
 Unique matches insert, several extend to the common prefix, Tab again
-lists the candidates.
+lists the candidates. The newest history entry beginning with the
+current input appears in dim text; Right or C-f at the end accepts it.
 
-  Left/Right C-b/C-f   move          C-w        kill word
-  Up/Down C-p/C-n      history       C-k / C-u  kill to end / line
+  Left C-b             move left     C-w        kill word
+  Right C-f            move/accept   C-k        kill to end
+  Up/Down C-p/C-n      history       C-u        kill line
   Home/End C-a/C-e     line ends     C-l        clear screen
   Backspace / Delete   delete        C-c        abort line
   C-d                  delete forward, or exit on an empty line
@@ -208,14 +210,16 @@ bound *specials* magenta.")
 
     ("history" "what is remembered and where"
      "History persists in ~/.config/cclsh/history (XDG_CONFIG_HOME is
-respected), one printed string per line:
+respected), one printed string per entry:
 
   \"ls -la\"
   \"(pipe (git \\\"log\\\") (head))\"
 
 Loading keeps the newest 10000. Blank lines, aborted lines and
 immediate duplicates are skipped, and non-interactive sessions never
-write it. Multi-line entries recall with newlines folded to spaces.")
+write it. Multi-line entries recall with their original newlines. The
+newest entry beginning with current input is offered as a dim
+suggestion; Right or C-f accepts it.")
 
     ("environment" "environment variables, the lispy way"
      "From the command line:

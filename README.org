@@ -29,6 +29,12 @@ This produces a standalone =cclsh= binary in the repository root via
 (cclsh:main)
 #+end_src
 
+Run the regression checks with:
+
+#+begin_src sh
+scripts/check
+#+end_src
+
 * Behavior
 
 - A line starting with =(= is evaluated as Lisp in the =cclsh-user=
@@ -91,8 +97,11 @@ This produces a standalone =cclsh= binary in the repository root via
 
 * Line editor
 
-Arrow keys navigate history and the cursor. Tab completes command
-names, file paths and Lisp symbols. Supported keys: C-a/C-e
+Arrow keys navigate history and the cursor. As you type, the newest
+matching history entry appears after the cursor in dim text; Right or
+C-f at the end accepts it. Multi-line history entries retain their
+newlines. Tab completes command names, file paths and Lisp symbols.
+Supported keys: C-a/C-e
 (home/end), C-k/C-u (kill to end/whole line), C-w (kill word), C-l
 (clear screen), C-d (EOF on an empty line), C-c (abort line). Input is
 highlighted with the standard 16 terminal colors: known commands green,
@@ -105,5 +114,4 @@ long form, including login shell setup.
 * Not yet
 
 => < >>= characters in command mode (use the Lisp redirection
-stages), script argv, and a right-side prompt. Multi-line history
-entries are recalled with newlines folded to spaces.
+stages), script argv, and a right-side prompt.

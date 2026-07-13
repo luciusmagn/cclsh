@@ -123,8 +123,8 @@ Rules:
 - Unfinished input continues on the next line under a =...= prompt:
   unbalanced Lisp forms, open strings in either mode, and a command
   line ending in a backslash (sh style, the backslash joins the lines
-  directly). History recalls multi-line entries with newlines folded
-  to spaces.
+  directly). History recalls multi-line entries with their original
+  newlines intact.
 - Calling an undefined function is reported up front with close
   suggestions: =(defparam *x* 1)= says =undefined function defparam,
   did you mean defparameter?= and does not evaluate the arguments of a
@@ -302,7 +302,8 @@ Details worth knowing:
 | Key                 | Action                              |
 |---------------------+-------------------------------------|
 | Tab                 | complete commands, files or symbols |
-| Left/Right, C-b/C-f | move cursor                         |
+| Left, C-b           | move cursor left                    |
+| Right, C-f          | move right or accept a suggestion   |
 | Up/Down, C-p/C-n    | older/newer history entry           |
 | Home/End, C-a/C-e   | start/end of line                   |
 | Backspace, C-h      | delete backward                     |
@@ -322,6 +323,11 @@ mode, including =:keywords=. A unique match inserts itself, several
 matches extend to their common prefix, and pressing Tab again lists
 the candidates.
 
+The newest history entry beginning with the current input appears in
+dim text after the cursor. Press Right or C-f at the end of the input
+to accept the whole suggestion. Moving within existing input keeps the
+ordinary one-character Right and C-f behavior.
+
 Input highlights as you type with the standard 16 terminal colors.
 In command mode: external commands green, builtins cyan, unknown
 commands red, lone bound variables magenta, strings yellow, numbers
@@ -335,10 +341,10 @@ parens dim.
 * History
 
 History lives in =~/.config/cclsh/history= (=XDG_CONFIG_HOME= is
-respected), one printed string per line, capped at 10000 entries on
+respected), one printed string per entry, capped at 10000 entries on
 load. Blank lines, aborted lines and immediate duplicates are not
 recorded. Piped (non-interactive) sessions read history but never
-write it.
+write it. Recalled entries retain embedded newlines exactly.
 
 * Configuration
 
@@ -466,5 +472,3 @@ config change) restores fish, and a root TTY login works regardless.
 - =-c= strings and scripts use cclsh syntax, not sh; complex remote
   commands may need =sh -c= spelled explicitly.
 - Script arguments (argv for scripts) are not passed yet.
-- Multi-line history entries are recalled with newlines folded to
-  spaces, which matters if the original form contained =;= comments.

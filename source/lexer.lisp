@@ -23,6 +23,15 @@
   "True when CHAR is considered whitespace."
   (and (member char *whitespace-characters*) t))
 
+(defun lexer--line-comment-end (line start)
+  "Index of the newline or return ending a line comment in LINE, or
+   the length of LINE when the comment reaches the end of input."
+  (or (position-if (lambda (char)
+                     (or (char= char #\newline)
+                         (char= char #\return)))
+                   line :start start)
+      (length line)))
+
 
 ;;; Command mode
 
@@ -102,7 +111,9 @@
                                    (when (< index length)
                                      (incf index)))
                                   ((char= char #\;)
-                                   (setf index length))
+                                   (setf index
+                                         (lexer--line-comment-end line
+                                                                  (1+ index))))
                                   (t
                                    (incf index)))))
                  (when (plusp depth)
@@ -263,7 +274,8 @@
                        ((char= char #\")
                         (scan-string start))
                        ((char= char #\;)
-                        (setf index length)
+                        (setf index
+                              (lexer--line-comment-end line (1+ index)))
                         (emit ':comment start index))
                        ((and (char= char #\#)
                              (< (1+ index) length)
