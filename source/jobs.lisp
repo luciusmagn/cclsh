@@ -484,6 +484,16 @@
   (force-output *error-output*)
   1)
 
+(defun job--complain-finished (builtin job)
+  "Report that the job BUILTIN was aimed at has already finished and
+   return the exit status."
+  (format *error-output* "~a~%"
+          (ansi-colorize (format nil "~a: job [~d] has finished"
+                                 builtin (job-id job))
+                         ':red))
+  (force-output *error-output*)
+  1)
+
 (defcommand jobs (&rest arguments)
   "List active jobs: id, the current + and previous - marks, status
    and command. jobs -l adds each job's process group id."
@@ -510,7 +520,7 @@
     (cond ((null job)
            (job--complain "fg" spec))
           ((eq (job-refresh job) ':done)
-           (job--complain "fg" (or spec (job-id job))))
+           (job--complain-finished "fg" job))
           (t
            (job-touch job)
            (format t "~a~%" (job-command job))
@@ -524,7 +534,7 @@
     (cond ((null job)
            (job--complain "bg" spec))
           ((eq (job-refresh job) ':done)
-           (job--complain "bg" (or spec (job-id job))))
+           (job--complain-finished "bg" job))
           ((eq (job-status job) ':running)
            (format *error-output* "~a~%"
                    (ansi-colorize
