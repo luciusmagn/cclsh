@@ -127,6 +127,32 @@
                   (prin1 multiline stream)))))
 
 
+;;;; -- UTF-8 environment --
+
+(let* ((name  "CCLSH_CHECK_ŽLUŤ")
+       (value "Příliš žluťoučký kůň 🐈")
+       (old   (cclsh:getenv name)))
+  (unwind-protect
+      (progn
+        (cclsh:setenv name value)
+        (check-equal "UTF-8 getenv round-trip"
+                     value
+                     (cclsh:getenv name))
+        (check-equal "UTF-8 environ snapshot"
+                     t
+                     (not (null
+                           (find (format nil "~a=~a" name value)
+                                 (cclsh:environment-variables)
+                                 :test #'string=))))
+        (cclsh::unsetenv name)
+        (check-equal "UTF-8 unsetenv"
+                     nil
+                     (cclsh:getenv name)))
+    (if old
+        (cclsh:setenv name old)
+        (cclsh::unsetenv name))))
+
+
 ;;;; -- Cursor movement and layout --
 
 (check-equal "right moves within input"

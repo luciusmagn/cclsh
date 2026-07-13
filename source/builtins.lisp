@@ -115,8 +115,7 @@
 (defcommand unset (&rest names)
   "Remove environment variables. Names are symbols or strings."
   (dolist (name names)
-    (ccl:with-cstrs ((pointer (environment-name name)))
-      (external-call "unsetenv" :address pointer :int)))
+    (unsetenv name))
   0)
 
 
