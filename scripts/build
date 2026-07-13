@@ -1,19 +1,25 @@
 #!/bin/sh
-# Build the cclsh binary atomically: save-application writes cclsh.new
-# and the rename below is atomic, so ./cclsh is always a complete
-# executable even if a build is interrupted.
+# Build a matched CCL kernel and saved image. The kernel finds the
+# adjacent cclsh.image by its own basename. New files are renamed only
+# after both are complete, so an interrupted build preserves the old pair.
 set -e
 cd "$(dirname "$0")/.."
-rm -f cclsh.new
+rm -f cclsh.new cclsh.image.new
 ccl -n -b -e \
     '(handler-case
          (load "scripts/build.lisp")
        (serious-condition (condition)
          (format *error-output* "cclsh build loader failed: ~a~%" condition)
          (ccl:quit 1)))'
-if [ ! -x cclsh.new ]; then
-    echo "cclsh build: cclsh.new was not created" >&2
+if [ ! -s cclsh.new ]; then
+    echo "cclsh build: the CCL kernel was not copied" >&2
     exit 1
 fi
+if [ ! -s cclsh.image.new ]; then
+    echo "cclsh build: cclsh.image.new was not created" >&2
+    exit 1
+fi
+chmod 755 cclsh.new
+mv -f cclsh.image.new cclsh.image
 mv -f cclsh.new cclsh
-echo "Built ./cclsh"
+echo "Built ./cclsh and ./cclsh.image"

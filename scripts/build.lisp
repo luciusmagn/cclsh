@@ -80,10 +80,14 @@
 
 (setf ccl:*terminal-character-encoding-name* ':utf-8)
 
-;; Save under a temporary name; scripts/build renames it into place so
-;; an interrupted build can never truncate a binary that might be
-;; someone's login shell.
-(format t "Saving cclsh executable...~%")
-(ccl:save-application "cclsh.new"
+;; Keep the heap image separate from the kernel. On current Linux,
+;; CCL 1.13's prepended-kernel image can intermittently resume through
+;; an invalid rt_sigreturn frame. The ordinary adjacent-image startup
+;; path does not have that failure. scripts/build atomically installs
+;; the matched kernel and image after both files exist.
+(format t "Copying the CCL kernel...~%")
+(uiop:copy-file (truename "/proc/self/exe") "cclsh.new")
+(format t "Saving cclsh image...~%")
+(ccl:save-application "cclsh.image.new"
                       :toplevel-function #'cclsh:shell-toplevel
-                      :prepend-kernel t)
+                      :prepend-kernel nil)

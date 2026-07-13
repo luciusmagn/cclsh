@@ -7,6 +7,10 @@ if [ ! -x ./cclsh ]; then
     echo "cclsh integration: build ./cclsh first with scripts/build" >&2
     exit 2
 fi
+if [ ! -s ./cclsh.image ]; then
+    echo "cclsh integration: ./cclsh.image is missing; run scripts/build" >&2
+    exit 2
+fi
 
 for program in ccl script setsid timeout pkill ps tr grep stty seq yes head wc cat sleep
 do
@@ -16,9 +20,9 @@ do
     fi
 done
 
-if find source cclsh.asd -type f -newer ./cclsh -print -quit | grep -q .
+if find source cclsh.asd -type f -newer ./cclsh.image -print -quit | grep -q .
 then
-    echo "cclsh integration: ./cclsh is stale; run scripts/build first" >&2
+    echo "cclsh integration: ./cclsh.image is stale; run scripts/build first" >&2
     exit 2
 fi
 

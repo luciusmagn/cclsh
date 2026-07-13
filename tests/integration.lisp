@@ -284,6 +284,14 @@ printf '%s\\n' $$ > \"$sidfile\"
 exec /usr/bin/timeout --signal=TERM --kill-after=1 \"$seconds\" \"$@\"
 ")
   (integration-write-program
+   "pty-session"
+   "#!/bin/sh
+sidfile=$1
+shift
+printf '%s\\n' $$ > \"$sidfile\"
+exec /usr/bin/script \"$@\"
+")
+  (integration-write-program
    "mark-and-sleep"
    "#!/bin/sh
 : > \"$CCLSH_TEST_ROOT/side-effect\"
@@ -321,13 +329,18 @@ printf '%s\\n' \"$1\"
   (output "" :type string)
   (error-output "" :type string))
 
-(defun integration-kill-session (session-id)
-  "Kill every surviving process in SESSION-ID."
+(defun integration-signal-session (session-id signal)
+  "Send SIGNAL to every surviving process in SESSION-ID."
   (ignore-errors
     (ccl:run-program "/usr/bin/pkill"
-                     (list "-KILL" "-s" (princ-to-string session-id))
+                     (list (format nil "-~a" signal)
+                           "-s" (princ-to-string session-id))
                      :input nil :output nil :error nil :wait t))
   (values))
+
+(defun integration-kill-session (session-id)
+  "Kill every surviving process in SESSION-ID."
+  (integration-signal-session session-id "KILL"))
 
 (defun integration-process-status (process)
   "Return conventional integer status for completed PROCESS."
@@ -410,6 +423,13 @@ printf '%s\\n' \"$1\"
 
 
 ;;;; -- Direct pipeline checks --
+
+(defun integration-check-image-startup ()
+  "Start the saved image repeatedly to catch resume-path failures."
+  (loop for attempt from 1 to 100
+        for result = (integration-run "exit 0" :timeout 2)
+        do (integration-require-success
+            result (format nil "saved-image startup ~d" attempt))))
 
 (defun integration-check-no-polling ()
   "Require process and job state changes to be event driven."
@@ -845,6 +865,7 @@ printf '%s\\n' \"$1\"
 (defstruct integration-session
   "One cclsh instance running below util-linux SCRIPT's PTY."
   process
+  session-id
   input
   output
   reader-process
@@ -943,31 +964,6 @@ printf '%s\\n' \"$1\"
                                                   :timeout timeout)))
       (subseq (integration-session-text session) start end))))
 
-(defun integration-session-start ()
-  "Start an isolated interactive saved-image session below a real PTY."
-  (ignore-errors (delete-file (integration-path "prompt-count")))
-  (let* ((process
-           (ccl:run-program
-            "/usr/bin/script"
-            (list "-qefc" (integration-session-command-line) "/dev/null")
-            :input ':stream
-            :output ':stream
-            :error ':output
-            :wait nil
-            :external-format ':utf-8))
-         (session
-           (make-integration-session
-            :process process
-            :input (ccl:external-process-input-stream process)
-            :output (ccl:external-process-output-stream process))))
-    (setf (integration-session-reader-process session)
-          (ccl:process-run-function
-           "cclsh integration PTY reader"
-           (lambda () (integration-session-read-loop session))))
-    (integration-session-wait session "__CCLSH_PROMPT_1__" :timeout 12)
-    (setf (integration-session-prompt-number session) 1)
-    session))
-
 (defun integration-session-stop (session)
   "Stop SESSION and close its streams, even after a failed check."
   (when session
@@ -978,20 +974,68 @@ printf '%s\\n' \"$1\"
     (unless (ccl:timed-wait-on-semaphore
              (ccl::external-process-completed
               (integration-session-process session)) 2)
-      (ignore-errors
-        (ccl:signal-external-process
-         (integration-session-process session) 15 :error-if-exited nil))
+      (integration-signal-session
+       (integration-session-session-id session) "TERM")
       (unless (ccl:timed-wait-on-semaphore
                (ccl::external-process-completed
                 (integration-session-process session)) 1)
-        (ignore-errors
-          (ccl:signal-external-process
-           (integration-session-process session) 9 :error-if-exited nil))))
+        (integration-kill-session
+         (integration-session-session-id session))
+        (ccl:timed-wait-on-semaphore
+         (ccl::external-process-completed
+          (integration-session-process session)) 2)))
     (ignore-errors (close (integration-session-input session)))
     (ignore-errors (close (integration-session-output session)))
     (ignore-errors
       (ccl:join-process (integration-session-reader-process session))))
   (values))
+
+(defun integration-session-start ()
+  "Start an isolated interactive saved-image session below a real PTY."
+  (ignore-errors (delete-file (integration-path "prompt-count")))
+  (let ((session-path (integration-output-path "pty-sid"))
+        (session nil)
+        (ready nil))
+    (unwind-protect
+        (let* ((process
+                 (ccl:run-program
+                  "/usr/bin/setsid"
+                  (list "--wait"
+                        (concatenate 'string *integration-bin-directory*
+                                     "pty-session")
+                        session-path
+                        "-qefc" (integration-session-command-line)
+                        "/dev/null")
+                  :input ':stream
+                  :output ':stream
+                  :error ':output
+                  :wait nil
+                  :external-format ':utf-8)))
+          (setf session
+                (make-integration-session
+                 :process process
+                 :session-id (ccl:external-process-id process)
+                 :input (ccl:external-process-input-stream process)
+                 :output (ccl:external-process-output-stream process)))
+          (loop repeat 100
+                until (probe-file session-path)
+                do (sleep 0.01))
+          (when (probe-file session-path)
+            (setf (integration-session-session-id session)
+                  (parse-integer
+                   (string-trim '(#\space #\tab #\newline #\return)
+                                (integration-read-file session-path)))))
+          (setf (integration-session-reader-process session)
+                (ccl:process-run-function
+                 "cclsh integration PTY reader"
+                 (lambda () (integration-session-read-loop session))))
+          (integration-session-wait session "__CCLSH_PROMPT_1__" :timeout 12)
+          (setf (integration-session-prompt-number session) 1)
+          (setf ready t)
+          session)
+      (unless ready
+        (integration-session-stop session))
+      (ignore-errors (delete-file session-path)))))
 
 (defun integration-session-interrupt (session character start &key (timeout 8))
   "Send control CHARACTER, then return output through the next prompt."
@@ -1283,6 +1327,8 @@ printf '%s\\n' \"$1\"
 (unwind-protect
     (progn
       (integration-install-programs)
+      (integration-test "saved-image startup stress"
+                        #'integration-check-image-startup)
       (integration-test "event-driven child state"
                         #'integration-check-no-polling)
       (integration-test "one process group per pipeline"

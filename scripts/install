@@ -1,12 +1,15 @@
 #!/bin/sh
-# Build cclsh and install a real copy (not a symlink) into ~/.local/bin
-# atomically. A login shell in /etc/passwd should point at this copy:
-# the repository binary is gitignored and one git clean -fdx away from
-# disappearing.
+# Build cclsh and atomically install its matched kernel and image into
+# ~/.local/bin. A login shell in /etc/passwd should point at this real
+# copy: repository artifacts are gitignored and one git clean -fdx away
+# from disappearing.
 set -e
 cd "$(dirname "$0")/.."
 scripts/build
 mkdir -p "$HOME/.local/bin"
+cp cclsh.image "$HOME/.local/bin/cclsh.image.new"
 cp cclsh "$HOME/.local/bin/cclsh.new"
+chmod 755 "$HOME/.local/bin/cclsh.new"
+mv -f "$HOME/.local/bin/cclsh.image.new" "$HOME/.local/bin/cclsh.image"
 mv -f "$HOME/.local/bin/cclsh.new" "$HOME/.local/bin/cclsh"
-echo "Installed $HOME/.local/bin/cclsh"
+echo "Installed $HOME/.local/bin/cclsh and its saved image"
