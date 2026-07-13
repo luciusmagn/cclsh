@@ -212,12 +212,13 @@ Unique matches insert, several extend to the common prefix, Tab again
 lists the candidates. The newest history entry beginning with the
 current input appears in dim text; Right or C-f at the end accepts it.
 
-  Left C-b             move left     C-w        kill word
-  Right C-f            move/accept   C-k        kill to end
-  Up/Down C-p/C-n      history       C-u        kill line
-  Home/End C-a/C-e     line ends     C-l        clear screen
-  Backspace / Delete   delete        C-c        abort line
+  Left/Right C-b/C-f   move/accept   Ctrl-arrows move by word
+  Up/Down C-p/C-n      history       C-w/C-h     kill word
+  Home/End C-a/C-e     line ends     C-k/C-u     kill rest/line
+  Backspace / Delete   delete        C-l/C-c     clear/abort
   C-d                  delete forward, or exit on an empty line
+  Alt-Enter            insert a newline without submitting
+  Shift-Enter          same when the terminal reports modified Enter
 
 Colors: external commands green, builtins cyan, unknown red, lone
 bound variables magenta, strings yellow, numbers cyan, $VAR magenta,

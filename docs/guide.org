@@ -334,17 +334,23 @@ policy through its callbacks.
 | Tab                 | complete commands, files or symbols |
 | Left, C-b           | move cursor left                    |
 | Right, C-f          | move right or accept a suggestion   |
+| Ctrl-Left/Right     | move backward/forward by word       |
 | Up/Down, C-p/C-n    | older/newer history entry           |
 | Home/End, C-a/C-e   | start/end of line                   |
-| Backspace, C-h      | delete backward                     |
+| Backspace           | delete backward                     |
 | Delete              | delete forward                      |
 | C-d on text         | delete forward                      |
 | C-d on empty line   | exit the shell                      |
-| C-w                 | delete word backward                |
+| C-w, C-Backspace/C-h | delete word backward               |
 | C-k                 | kill to end of line                 |
 | C-u                 | discard the whole line              |
 | C-l                 | clear screen                        |
 | C-c                 | abort the current line              |
+| Alt-Enter           | insert a newline without submitting |
+| Shift-Enter (*)     | same when reported by the terminal  |
+
+(*) Shift-Enter requires a terminal that reports modified Enter through CSI-u
+or modifyOtherKeys sequences.
 
 Tab completes command names in command position (=PATH= executables
 plus defined commands), file paths elsewhere (directories complete
