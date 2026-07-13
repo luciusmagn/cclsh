@@ -131,46 +131,60 @@
           do (write-char #\return))
   (values))
 
-(defun editor--render (edit-prompt prompt-width buffer cursor columns
-                       previous-row &key suggestion)
-  "Redraw the edit line and place the cursor. PREVIOUS-ROW is the
-   wrapped row the cursor was left on by the previous render. SUGGESTION
-   is unaccepted text displayed after BUFFER. Returns the row the cursor
-   now sits on."
+(defun editor--write-prompt (edit-prompt prompt-width columns)
+  "Write the static editable PROMPT once and return its ending row.
+   Materialize an exact-width terminal wrap before dynamic text starts."
+  (write-string edit-prompt)
+  (multiple-value-bind (row column pending-wrap)
+      (editor--screen-position "" prompt-width columns)
+    (declare (ignore column))
+    (when pending-wrap
+      (write-char #\linefeed)
+      (write-char #\return))
+    (force-output)
+    row))
+
+(defun editor--render (prompt-width buffer cursor columns previous-row
+                       &key suggestion)
+  "Redraw only the dynamic input after the static prompt and place the
+   cursor. PREVIOUS-ROW is the wrapped row where the prior render left
+   it. SUGGESTION is unaccepted text displayed after BUFFER. Returns
+   the row where the cursor now sits."
   (let* ((suffix  (or suggestion ""))
          (display (concatenate 'string buffer suffix)))
-    (multiple-value-bind (target-row target-column target-wrap)
-        (editor--screen-position buffer prompt-width columns :end cursor)
-      (declare (ignore target-wrap))
-      (multiple-value-bind (end-row end-column exact-wrap)
-          (editor--screen-position display prompt-width columns)
-        (declare (ignore end-column))
-        (write-string (ansi-cursor-hide))
-        (unwind-protect
-             (progn
-               (write-string (ansi-cursor-up previous-row))
-               (write-char #\return)
-               (write-string (ansi-clear-below))
-               (write-string edit-prompt)
-               (editor--write-display (highlight-line buffer))
-               (when (plusp (length suffix))
-                 (editor--write-display
-                  (ansi-colorize suffix ':bright-black)))
-               (when exact-wrap
-                 (write-char #\linefeed)
-                 (write-char #\return))
-               (write-string (ansi-cursor-up (- end-row target-row)))
-               (write-string (ansi-cursor-column target-column)))
-          (write-string (ansi-cursor-show))
-          (force-output))
-        target-row))))
+    (multiple-value-bind (prompt-row prompt-column prompt-wrap)
+        (editor--screen-position "" prompt-width columns)
+      (declare (ignore prompt-wrap))
+      (multiple-value-bind (target-row target-column target-wrap)
+          (editor--screen-position buffer prompt-width columns :end cursor)
+        (declare (ignore target-wrap))
+        (multiple-value-bind (end-row end-column exact-wrap)
+            (editor--screen-position display prompt-width columns)
+          (declare (ignore end-column))
+          (write-string (ansi-cursor-hide))
+          (unwind-protect
+               (progn
+                 (write-string
+                  (ansi-cursor-up (- previous-row prompt-row)))
+                 (write-string (ansi-cursor-column prompt-column))
+                 (write-string (ansi-clear-below))
+                 (editor--write-display (highlight-line buffer))
+                 (when (plusp (length suffix))
+                   (editor--write-display
+                    (ansi-colorize suffix ':bright-black)))
+                 (when exact-wrap
+                   (write-char #\linefeed)
+                   (write-char #\return))
+                 (write-string (ansi-cursor-up (- end-row target-row)))
+                 (write-string (ansi-cursor-column target-column)))
+            (write-string (ansi-cursor-show))
+            (force-output))
+          target-row)))))
 
-(defun editor--finish (edit-prompt prompt-width buffer columns previous-row
-                       &key marker)
+(defun editor--finish (prompt-width buffer columns previous-row &key marker)
   "Park the cursor after the buffer, optionally print a MARKER such as
    ^C, and move to a fresh line."
-  (editor--render edit-prompt prompt-width buffer (length buffer) columns
-                  previous-row)
+  (editor--render prompt-width buffer (length buffer) columns previous-row)
   (when marker
     (write-string (ansi-colorize marker ':bright-black)))
   (write-char #\Linefeed)
@@ -262,11 +276,13 @@
                          (+ start (length common))
                          previous-row)
                  (progn
-                   (editor--render edit-prompt prompt-width buffer
-                                   (length buffer) columns previous-row)
+                   (editor--render prompt-width buffer (length buffer)
+                                   columns previous-row)
                    (write-char #\Linefeed)
                    (editor--print-candidates displays columns)
-                   (values buffer cursor 0))))))))
+                   (values buffer cursor
+                           (editor--write-prompt edit-prompt prompt-width
+                                                 columns)))))))))
 
 (defun edit-line (prompt &key (history *history*))
   "Edit one line under PROMPT. Returns (values line kind) where KIND is
@@ -295,14 +311,15 @@
                     (if line
                         (values line ':line)
                         (values nil ':eof)))))
+              (setf previous-row
+                    (editor--write-prompt edit-prompt prompt-width columns))
               (loop
                 (setf suggestion
                       (and (= cursor (length buffer))
                            (history-suggestion buffer history)))
                 (setf previous-row
                       (editor--render
-                       edit-prompt prompt-width buffer cursor columns
-                       previous-row
+                       prompt-width buffer cursor columns previous-row
                        :suggestion (and suggestion
                                         (subseq suggestion cursor))))
                 (multiple-value-bind (key char)
@@ -315,21 +332,19 @@
                                                (subseq buffer cursor)))
                      (incf cursor))
                     (:enter
-                     (editor--finish edit-prompt prompt-width buffer columns
-                                     previous-row)
+                     (editor--finish prompt-width buffer columns previous-row)
                      (return (values buffer ':line)))
                     (:abort
-                     (editor--finish edit-prompt prompt-width buffer columns
-                                     previous-row :marker "^C")
+                     (editor--finish prompt-width buffer columns previous-row
+                                     :marker "^C")
                      (return (values nil ':abort)))
                     (:eof
-                     (editor--finish edit-prompt prompt-width buffer columns
-                                     previous-row)
+                     (editor--finish prompt-width buffer columns previous-row)
                      (return (values nil ':eof)))
                     (:eof-or-delete
                      (cond ((zerop (length buffer))
-                            (editor--finish edit-prompt prompt-width buffer
-                                            columns previous-row)
+                            (editor--finish prompt-width buffer columns
+                                            previous-row)
                             (return (values nil ':eof)))
                            ((< cursor (length buffer))
                             (setf buffer (concatenate 'string
@@ -389,7 +404,9 @@
                     (:clear-screen
                      (write-string (ansi-clear-screen))
                      (write-string preamble)
-                     (setf previous-row 0))
+                     (setf previous-row
+                           (editor--write-prompt edit-prompt prompt-width
+                                                 columns)))
                     (:ignore
                      nil)))))
           (terminal-restore))))))

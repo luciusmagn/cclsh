@@ -171,11 +171,15 @@
 
 (let ((rendered
         (with-output-to-string (*standard-output*)
-          (cclsh::editor--render "root λ " 7 "pri" 3 80 0
+          (cclsh::editor--render 7 "pri" 3 80 0
                                  :suggestion "ntf example"))))
-  (check-equal "redraw hides the cursor before returning to column zero"
+  (check-equal "redraw hides the cursor before repositioning"
                t
                (cclsh::string-prefix-p (cclsh::ansi-cursor-hide) rendered))
+  (check-equal "redraw never erases or repaints the static prompt"
+               nil
+               (or (find #\return rendered)
+                   (search "root" rendered)))
   (check-equal "redraw restores the cursor after positioning"
                t
                (let ((show (cclsh::ansi-cursor-show)))
