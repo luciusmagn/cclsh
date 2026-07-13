@@ -49,6 +49,59 @@
 (defconstant +sigttou+ 22
   "Signal number of SIGTTOU.")
 
+(defconstant +terminal-eintr+ 4
+  "Linux errno for an interrupted system call.")
+
+(defconstant +terminal-esrch+ 3
+  "Linux errno for a vanished process group.")
+
+(defconstant +terminal-eperm+ 1
+  "Linux errno used when a process group has left the session.")
+
+(define-condition terminal-control-error (error)
+  ((operation
+    :initarg :operation
+    :reader terminal-control-error-operation)
+   (process-group
+    :initarg :process-group
+    :reader terminal-control-error-process-group)
+   (code
+    :initarg :code
+    :reader terminal-control-error-code))
+  (:documentation "Signaled when a foreground terminal handoff fails.")
+  (:report
+   (lambda (condition stream)
+     (format stream "cannot ~a process group ~d: ~a"
+             (terminal-control-error-operation condition)
+             (terminal-control-error-process-group condition)
+             (let ((pointer
+                     (external-call
+                      "strerror"
+                      :int (terminal-control-error-code condition)
+                      :address)))
+               (if (ccl:%null-ptr-p pointer)
+                   (format nil "system error ~d"
+                           (terminal-control-error-code condition))
+                   (ccl:%get-cstring pointer)))))))
+
+(define-condition terminal-attributes-error (error)
+  ((operation
+    :initarg :operation
+    :reader terminal-attributes-error-operation)
+   (code
+    :initarg :code
+    :reader terminal-attributes-error-code))
+  (:documentation "Signaled when terminal attributes cannot be handled.")
+  (:report
+   (lambda (condition stream)
+     (let* ((code (terminal-attributes-error-code condition))
+            (pointer (external-call "strerror" :int code :address)))
+       (format stream "cannot ~a terminal attributes: ~a"
+               (terminal-attributes-error-operation condition)
+               (if (ccl:%null-ptr-p pointer)
+                   (format nil "system error ~d" code)
+                   (ccl:%get-cstring pointer)))))))
+
 (defvar *terminal-saved-termios* nil
   "Saved termios bytes, restored after raw line editing.")
 
@@ -93,12 +146,29 @@
        (= 1 (external-call "isatty" :int 1 :int))))
 
 (defun terminal--get-termios (pointer)
-  "Fill POINTER with the terminal attributes. Returns true on success."
-  (zerop (external-call "tcgetattr" :int 0 :address pointer :int)))
+  "Fill POINTER with terminal attributes. Return success and errno."
+  (loop
+    (when (zerop (external-call "tcgetattr"
+                                :int 0
+                                :address pointer
+                                :int))
+      (return (values t 0)))
+    (let ((code (ccl::get-errno)))
+      (unless (= code +terminal-eintr+)
+        (return (values nil code))))))
 
 (defun terminal--set-termios (pointer)
-  "Apply the terminal attributes at POINTER. Returns true on success."
-  (zerop (external-call "tcsetattr" :int 0 :int +tcsanow+ :address pointer :int)))
+  "Apply attributes at POINTER. Return success and final errno."
+  (loop
+    (when (zerop (external-call "tcsetattr"
+                                :int 0
+                                :int +tcsanow+
+                                :address pointer
+                                :int))
+      (return (values t 0)))
+    (let ((code (ccl::get-errno)))
+      (unless (= code +terminal-eintr+)
+        (return (values nil code))))))
 
 (defun terminal-raw ()
   "Switch the terminal to character-at-a-time input without echo or
@@ -119,12 +189,18 @@
 (defun terminal-restore ()
   "Restore the terminal state saved by TERMINAL-RAW."
   (when *terminal-saved-termios*
-    (ccl:%stack-block ((pointer +termios-size+))
-      (dotimes (index +termios-size+)
-        (setf (ccl:%get-unsigned-byte pointer index)
-              (aref *terminal-saved-termios* index)))
-      (terminal--set-termios pointer))
-    (setf *terminal-saved-termios* nil))
+    (unwind-protect
+        (ccl:%stack-block ((pointer +termios-size+))
+          (dotimes (index +termios-size+)
+            (setf (ccl:%get-unsigned-byte pointer index)
+                  (aref *terminal-saved-termios* index)))
+          (multiple-value-bind (success code)
+              (terminal--set-termios pointer)
+            (unless success
+              (error 'terminal-attributes-error
+                     :operation "restore"
+                     :code code))))
+      (setf *terminal-saved-termios* nil)))
   (values))
 
 (defun terminal-attributes ()
@@ -137,6 +213,21 @@
           (setf (aref saved index) (ccl:%get-unsigned-byte pointer index)))
         saved))))
 
+(defun terminal-attributes-checked ()
+  "Snapshot terminal attributes or signal TERMINAL-ATTRIBUTES-ERROR."
+  (ccl:%stack-block ((pointer +termios-size+))
+    (multiple-value-bind (success code)
+        (terminal--get-termios pointer)
+      (unless success
+        (error 'terminal-attributes-error
+               :operation "read"
+               :code code)))
+    (let ((saved (make-array +termios-size+
+                             :element-type '(unsigned-byte 8))))
+      (dotimes (index +termios-size+)
+        (setf (aref saved index) (ccl:%get-unsigned-byte pointer index)))
+      saved)))
+
 (defun terminal-attributes-apply (attributes)
   "Apply an ATTRIBUTES snapshot taken by TERMINAL-ATTRIBUTES. Does
    nothing when ATTRIBUTES is NIL."
@@ -144,7 +235,12 @@
     (ccl:%stack-block ((pointer +termios-size+))
       (dotimes (index +termios-size+)
         (setf (ccl:%get-unsigned-byte pointer index) (aref attributes index)))
-      (terminal--set-termios pointer)))
+      (multiple-value-bind (success code)
+          (terminal--set-termios pointer)
+        (unless success
+          (error 'terminal-attributes-error
+                 :operation "apply"
+                 :code code)))))
   (values))
 
 (defun terminal-shell-attributes-save ()
@@ -211,8 +307,38 @@
 
 (defun terminal-foreground (process-group)
   "Make PROCESS-GROUP the terminal's foreground process group.
-   Returns true when the terminal accepted the handoff."
-  (zerop (external-call "tcsetpgrp" :int 0 :int process-group :int)))
+   Retries interrupted calls. Returns success and the final errno."
+  (loop
+    (when (zerop (external-call "tcsetpgrp"
+                                :int 0
+                                :int process-group
+                                :int))
+      (return (values t 0)))
+    (let ((code (ccl::get-errno)))
+      (unless (= code +terminal-eintr+)
+        (return (values nil code))))))
+
+(defun terminal-current-foreground ()
+  "Return the terminal's foreground process group and final errno."
+  (loop
+    (let ((process-group (external-call "tcgetpgrp" :int 0 :int)))
+      (unless (minusp process-group)
+        (return (values process-group 0))))
+    (let ((code (ccl::get-errno)))
+      (unless (= code +terminal-eintr+)
+        (return (values nil code))))))
+
+(defun terminal-foreground-checked (process-group
+                                    &key (operation "foreground"))
+  "Make PROCESS-GROUP foreground or signal TERMINAL-CONTROL-ERROR."
+  (multiple-value-bind (success code)
+      (terminal-foreground process-group)
+    (unless success
+      (error 'terminal-control-error
+             :operation operation
+             :process-group process-group
+             :code code)))
+  (values))
 
 (defun process-group-continue (process-group)
   "Send SIGCONT to PROCESS-GROUP, unsticking a child that touched the
