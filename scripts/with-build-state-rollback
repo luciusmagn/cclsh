@@ -1,0 +1,124 @@
+#!/bin/sh
+# Restore the public kernel, image and attestation paths when COMMAND fails.
+set -eu
+cd "$(dirname "$0")/.."
+
+if [ "$#" -eq 0 ]; then
+    echo "usage: scripts/with-build-state-rollback COMMAND [ARGUMENT...]" >&2
+    exit 2
+fi
+if ! scripts/build-lock-held; then
+    echo "cclsh build: state rollback requires the build lock" >&2
+    exit 1
+fi
+
+transaction_directory=$(
+    mktemp -d "$PWD/.cclsh-state-transaction.XXXXXX"
+)
+rollback_armed=0
+transaction_complete=0
+rollback_failed=0
+
+snapshot_path()
+{
+    snapshot_name=$1
+    if [ -L "$snapshot_name" ]; then
+        readlink "$snapshot_name" \
+            >"$transaction_directory/$snapshot_name.target"
+    elif [ -e "$snapshot_name" ]; then
+        if [ ! -f "$snapshot_name" ]; then
+            echo \
+                "cclsh build: public state is not a file: $snapshot_name" \
+                >&2
+            return 1
+        fi
+        ln -- "$snapshot_name" \
+            "$transaction_directory/$snapshot_name.file"
+    else
+        : >"$transaction_directory/$snapshot_name.missing"
+    fi
+}
+
+restore_path()
+{
+    restore_name=$1
+    if [ -f "$transaction_directory/$restore_name.target" ]; then
+        if ! IFS= read -r restore_target \
+             <"$transaction_directory/$restore_name.target"
+        then
+            return 1
+        fi
+        restore_link=$transaction_directory/$restore_name.restore
+        if ! ln -s "$restore_target" "$restore_link" ||
+           ! mv -Tf -- "$restore_link" "$restore_name"
+        then
+            return 1
+        fi
+    elif [ -f "$transaction_directory/$restore_name.file" ]; then
+        if ! mv -Tf -- "$transaction_directory/$restore_name.file" \
+             "$restore_name"
+        then
+            return 1
+        fi
+    elif [ -f "$transaction_directory/$restore_name.missing" ]; then
+        if ! rm -f -- "$restore_name"; then
+            return 1
+        fi
+    else
+        return 1
+    fi
+}
+
+restore_build_state()
+{
+    restore_status=0
+    for restore_name in cclsh.image cclsh.attestation cclsh; do
+        if ! restore_path "$restore_name"; then
+            restore_status=1
+        fi
+    done
+    if ! sync -f .; then
+        restore_status=1
+    fi
+    return "$restore_status"
+}
+
+cleanup()
+{
+    cleanup_status=$?
+    trap - 0 1 2 15
+    if [ "$rollback_armed" -eq 1 ] &&
+       [ "$transaction_complete" -eq 0 ] &&
+       ! restore_build_state
+    then
+        rollback_failed=1
+        cleanup_status=1
+        echo "cclsh build: could not restore the previous public state" >&2
+        echo \
+            "cclsh build: preserved recovery directory:" \
+            "$transaction_directory" \
+            >&2
+    fi
+    if [ "$rollback_failed" -eq 0 ]; then
+        rm -rf -- "$transaction_directory"
+    fi
+    exit "$cleanup_status"
+}
+trap cleanup 0
+trap 'exit 129' 1
+trap 'exit 130' 2
+trap 'exit 143' 15
+
+snapshot_path cclsh
+snapshot_path cclsh.image
+snapshot_path cclsh.attestation
+rollback_armed=1
+
+set +e
+"$@"
+command_status=$?
+set -e
+if [ "$command_status" -eq 0 ]; then
+    transaction_complete=1
+fi
+exit "$command_status"

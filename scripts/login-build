@@ -10,6 +10,11 @@ if [ "$#" -ne 3 ]; then
     echo "usage: scripts/login-build CCL-SOURCE CCL ATTESTATION" >&2
     exit 2
 fi
+if [ "${CCLSH_LOGIN_STATE_TRANSACTION:-0}" != 1 ]; then
+    CCLSH_LOGIN_STATE_TRANSACTION=1
+    export CCLSH_LOGIN_STATE_TRANSACTION
+    exec scripts/with-build-state-rollback scripts/login-build "$@"
+fi
 
 ccl_source=$(realpath -e "$1")
 ccl_command=$2

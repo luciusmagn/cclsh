@@ -7,8 +7,14 @@ cd "$(dirname "$0")/.."
 if ! scripts/build-lock-held; then
     exec scripts/with-build-lock scripts/build "$@"
 fi
+if [ "${CCLSH_BUILD_STATE_TRANSACTION:-0}" != 1 ]; then
+    CCLSH_BUILD_STATE_TRANSACTION=1
+    export CCLSH_BUILD_STATE_TRANSACTION
+    exec scripts/with-build-state-rollback scripts/build "$@"
+fi
 validation_home=
 build_staging=
+build_transaction=
 temporary_link=
 
 cleanup_staged_build()
@@ -19,6 +25,9 @@ cleanup_staged_build()
     fi
     if [ -n "$build_staging" ]; then
         rm -rf -- "$build_staging"
+    fi
+    if [ -n "$build_transaction" ]; then
+        rm -rf -- "$build_transaction"
     fi
     if [ -n "$temporary_link" ]; then
         rm -f -- "$temporary_link"
@@ -75,11 +84,9 @@ if [ ! -s cclsh.image.new ]; then
 fi
 chmod 755 cclsh.new
 echo "Validating saved cclsh image..."
-validation_home="$PWD/.cclsh-build-validation-home.$$"
-if [ -e "$validation_home" ]; then
-    echo "cclsh build: validation HOME already exists: $validation_home" >&2
-    exit 1
-fi
+validation_home=$(
+    mktemp -d "$PWD/.cclsh-build-validation-home.XXXXXX"
+)
 if ! IFS= read -r dependency_line < dependencies.lock; then
     echo "cclsh build: could not read dependencies.lock" >&2
     exit 1
@@ -97,7 +104,6 @@ case "$expected_clinedi_commit" in
         exit 1
         ;;
 esac
-mkdir "$validation_home"
 build_root=$PWD
 if ! (
      cd "$validation_home"
@@ -211,15 +217,18 @@ else
     sync -f "$releases_directory"
 fi
 
-temporary_link=.cclsh-build-kernel-link.$$
+build_transaction=$(mktemp -d "$PWD/.cclsh-build-transaction.XXXXXX")
+temporary_link=$build_transaction/kernel-link
 ln -s "$release_directory/cclsh" "$temporary_link"
 mv -Tf "$temporary_link" cclsh
 temporary_link=
-temporary_link=.cclsh-build-image-link.$$
+temporary_link=$build_transaction/image-link
 ln -s "$release_directory/cclsh.image" "$temporary_link"
 mv -Tf "$temporary_link" cclsh.image
 temporary_link=
 sync -f .
+rm -rf -- "$build_transaction"
+build_transaction=
 rm -rf -- "$validation_home"
 validation_home=
 trap - 0 1 2 15
