@@ -1,6 +1,11 @@
 #!/bin/sh
 # Require a kernel named cclsh to leave its command operand for Lisp.
 set -eu
+running_uid=$(/usr/bin/id -u)
+if [ "$running_uid" -eq 0 ]; then
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin
+    export PATH
+fi
 cd "$(dirname "$0")/.."
 
 if [ "$#" -ne 2 ]; then
@@ -36,7 +41,19 @@ if [ ! -x /usr/bin/timeout ]; then
     exit 1
 fi
 
-probe_home=$(mktemp -d "${TMPDIR:-/tmp}/cclsh-argument-check.XXXXXX")
+if [ "$running_uid" -eq 0 ]; then
+    scratch_parent=/run
+    if [ ! -d "$scratch_parent" ] || [ -L "$scratch_parent" ] ||
+       [ "$(stat -c %u "$scratch_parent")" -ne 0 ] ||
+       [ -n "$(find "$scratch_parent" -prune -perm /022 -print -quit)" ]
+    then
+        echo "cclsh argument check: unsafe root scratch directory" >&2
+        exit 1
+    fi
+else
+    scratch_parent=${TMPDIR:-/tmp}
+fi
+probe_home=$(mktemp -d "$scratch_parent/cclsh-argument-check.XXXXXX")
 cleanup()
 {
     rm -rf -- "$probe_home"

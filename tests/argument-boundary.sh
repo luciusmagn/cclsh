@@ -37,6 +37,10 @@ printf '%s\n' '#!/bin/sh' 'exit 2' >"$bad_kernel"
 chmod 755 "$good_kernel" "$bad_kernel"
 
 scripts/verify-argument-boundary "$good_kernel" "$image"
+if [ "$(id -u)" -eq 0 ]; then
+    TMPDIR=$temporary_directory/missing-tmp \
+        scripts/verify-argument-boundary "$good_kernel" "$image"
+fi
 if scripts/verify-argument-boundary "$bad_kernel" "$image" \
      >/dev/null 2>&1
 then
