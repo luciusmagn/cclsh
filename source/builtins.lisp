@@ -82,6 +82,165 @@
 
 ;;; Quicklisp
 
+(defvar *packaged-quicklisp-template* nil
+  "Read-only Quicklisp template included by a binary package, or NIL.")
+
+(defvar *packaged-quicklisp-home* nil
+  "Writable Quicklisp home selected for this packaged process, or NIL.")
+
+(defvar *packaged-quicklisp-user-setup-home* nil
+  "Quicklisp home whose local-init files ran in this process, or NIL.")
+
+(defvar *packaged-quicklisp-last-error* nil
+  "Last packaged Quicklisp initialization error already reported.")
+
+(defun quicklisp--directory-pathname (path)
+  "Return PATH as an absolute or relative directory pathname."
+  (uiop:ensure-directory-pathname (pathname path)))
+
+(defun quicklisp--personal-home ()
+  "Return an existing personal Quicklisp home, or NIL."
+  (let ((home (merge-pathnames "quicklisp/" (user-homedir-pathname))))
+    (when (probe-file (merge-pathnames "setup.lisp" home))
+      home)))
+
+(defun quicklisp--packaged-home ()
+  "Return the writable Quicklisp home used by a packaged image."
+  (let* ((xdg  (getenv "XDG_DATA_HOME"))
+         (base (if (and xdg (plusp (length xdg)))
+                   (quicklisp--directory-pathname xdg)
+                   (merge-pathnames ".local/share/"
+                                    (user-homedir-pathname)))))
+    (merge-pathnames "cclsh/quicklisp/" base)))
+
+(defun quicklisp--copy-directory-tree (source target)
+  "Copy the regular files and directories below SOURCE into TARGET."
+  (ensure-directories-exist target)
+  (dolist (file (uiop:directory-files source))
+    (uiop:copy-file file (merge-pathnames (file-namestring file) target)))
+  (dolist (directory (uiop:subdirectories source))
+    (quicklisp--copy-directory-tree
+     directory
+     (merge-pathnames (enough-namestring directory source) target)))
+  target)
+
+(defun quicklisp--install-packaged-home (template target)
+  "Atomically initialize TARGET from packaged Quicklisp TEMPLATE."
+  (when (probe-file (merge-pathnames "setup.lisp" target))
+    (return-from quicklisp--install-packaged-home target))
+  (when (probe-file target)
+    (error "Quicklisp home exists without setup.lisp: ~a" target))
+  (let* ((parent (uiop:pathname-parent-directory-pathname target))
+         (temporary
+           (merge-pathnames
+            (format nil ".quicklisp.~d.tmp/" (ccl::getpid))
+            parent)))
+    (ensure-directories-exist parent)
+    (when (probe-file temporary)
+      (uiop:delete-directory-tree temporary
+                                  :validate t
+                                  :if-does-not-exist ':ignore))
+    (unwind-protect
+        (progn
+          (quicklisp--copy-directory-tree template temporary)
+          (handler-case
+              (rename-file temporary target)
+            (file-error (condition)
+              (unless (probe-file (merge-pathnames "setup.lisp" target))
+                (error condition))))
+          target)
+      (when (probe-file temporary)
+        (uiop:delete-directory-tree temporary
+                                    :validate t
+                                    :if-does-not-exist ':ignore)))))
+
+(defun quicklisp--rebase (home)
+  "Point the loaded Quicklisp client at writable HOME."
+  (let ((quicklisp-home
+          (find-symbol "*QUICKLISP-HOME*" '#:ql-setup))
+        (local-directories
+          (find-symbol "*LOCAL-PROJECT-DIRECTORIES*"
+                       '#:quicklisp-client)))
+    (unless (and quicklisp-home local-directories)
+      (return-from quicklisp--rebase nil))
+    (let ((directories (list (merge-pathnames "local-projects/" home))))
+      (when *packaged-quicklisp-template*
+        (pushnew
+         (uiop:pathname-parent-directory-pathname
+          (quicklisp--directory-pathname *packaged-quicklisp-template*))
+         directories
+         :test #'equal))
+      (setf (symbol-value quicklisp-home) home
+            (symbol-value local-directories) (nreverse directories)))
+    (pushnew (merge-pathnames "quicklisp/" home)
+             asdf:*central-registry*
+             :test #'equal)
+    (setf asdf:*user-cache*
+          (uiop:xdg-cache-home "common-lisp" ':implementation))
+    (asdf:initialize-output-translations nil)
+    (asdf:initialize-source-registry nil)
+    t))
+
+(defun quicklisp--select-packaged-home (template)
+  "Select or initialize the writable Quicklisp home for TEMPLATE."
+  (let ((override (getenv "CCLSH_QUICKLISP_HOME")))
+    (cond ((and override (plusp (length override)))
+           (quicklisp--install-packaged-home
+            template (quicklisp--directory-pathname override)))
+          ((quicklisp--personal-home))
+          (t
+           (quicklisp--install-packaged-home
+            template (quicklisp--packaged-home))))))
+
+(defun quicklisp--report-packaged-error (condition)
+  "Report packaged Quicklisp CONDITION once and return NIL."
+  (let ((message (princ-to-string condition)))
+    (unless (string= message (or *packaged-quicklisp-last-error* ""))
+      (format *error-output*
+              "cclsh: packaged Quicklisp unavailable: ~a~%"
+              message))
+    (setf *packaged-quicklisp-last-error* message))
+  nil)
+
+(defun quicklisp-packaged-setup ()
+  "Prepare writable Quicklisp state for a binary package."
+  (when (and *packaged-quicklisp-template*
+             (find-package '#:quicklisp))
+    (handler-case
+        (let* ((template
+                 (quicklisp--directory-pathname
+                  *packaged-quicklisp-template*))
+               (home
+                 (or *packaged-quicklisp-home*
+                     (quicklisp--select-packaged-home template))))
+          (unless (quicklisp--rebase home)
+            (error "loaded Quicklisp cannot be rebased"))
+          (setf *packaged-quicklisp-home* home
+                *packaged-quicklisp-last-error* nil)
+          t)
+      (error (condition)
+        (quicklisp--report-packaged-error condition)))))
+
+(defun quicklisp-packaged-user-setup ()
+  "Load personal Quicklisp local-init files for a configured session."
+  (when (quicklisp-packaged-setup)
+    (when (equal *packaged-quicklisp-home*
+                 *packaged-quicklisp-user-setup-home*)
+      (return-from quicklisp-packaged-user-setup t))
+    (handler-case
+        (let ((setup (find-symbol "SETUP" '#:quicklisp-client)))
+          (unless (and setup (fboundp setup))
+            (error "loaded Quicklisp has no setup function"))
+          (funcall setup)
+          (setf *packaged-quicklisp-user-setup-home*
+                *packaged-quicklisp-home*)
+          t)
+      (error (condition)
+        (format *error-output*
+                "cclsh: Quicklisp local setup failed: ~a~%"
+                condition)
+        nil))))
+
 (defun quicklisp-setup ()
   "Make Quicklisp available in the running shell. Loads an existing
    ~/quicklisp/setup.lisp, or downloads and installs Quicklisp with
@@ -89,7 +248,9 @@
   (let ((setup (merge-pathnames "quicklisp/setup.lisp"
                                 (user-homedir-pathname))))
     (cond ((find-package '#:quicklisp)
-           t)
+           (if *packaged-quicklisp-template*
+               (quicklisp-packaged-user-setup)
+               t))
           ((probe-file setup)
            (load setup :verbose nil :external-format ':utf-8)
            t)

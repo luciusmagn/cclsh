@@ -75,12 +75,20 @@
       (handler-case
           (progn
             (ensure-directories-exist (config-directory))
-            (with-open-file (stream (history-file)
-                                    :direction :output
-                                    :if-exists :append
-                                    :if-does-not-exist :create
-                                    :external-format ':utf-8)
-              (prin1 entry stream)
-              (terpri stream)))
+            (path-set-mode (config-directory) #o700)
+            (let ((descriptor
+                    (fd-open-output (history-file)
+                                    :append t
+                                    :mode #o600)))
+              (unwind-protect
+                  (progn
+                    (fd-set-mode descriptor #o600)
+                    (let ((stream (fd-output-stream descriptor)))
+                      (setf descriptor nil)
+                      (with-open-stream (stream stream)
+                        (prin1 entry stream)
+                        (terpri stream))))
+                (when descriptor
+                  (fd-close descriptor)))))
         (error () nil))))
   (values))

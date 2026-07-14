@@ -227,20 +227,30 @@
 
 (defun build-git-commit ()
   "The short commit of the checkout, with a -dirty marker when the
-   working tree has uncommitted changes. NIL outside a git checkout."
-  (let* ((root   (truename "./"))
-         (commit (build-git-output root
-                                   '("rev-parse" "--short" "HEAD"))))
-    (when (and commit (plusp (length commit)))
-      (if (plusp (length (or (build-git-output
-                              root '("status" "--porcelain")) "")))
-          (concatenate 'string commit "-dirty")
-          commit))))
+   working tree has uncommitted changes. A packager may provide the
+   immutable source identity through CCLSH_BUILD_COMMIT."
+  (let ((packaged (build-getenv-utf-8 "CCLSH_BUILD_COMMIT")))
+    (if (and packaged (plusp (length packaged)))
+        packaged
+        (let* ((root   (truename "./"))
+               (commit (build-git-output
+                        root '("rev-parse" "--short" "HEAD"))))
+          (when (and commit (plusp (length commit)))
+            (if (plusp (length (or (build-git-output
+                                    root '("status" "--porcelain")) "")))
+                (concatenate 'string commit "-dirty")
+                commit))))))
 
 (let ((commit          (build-git-commit))
-      (clinedi-commit (getf *build-clinedi-identity* ':commit)))
+      (clinedi-commit (getf *build-clinedi-identity* ':commit))
+      (quicklisp-template
+        (build-getenv-utf-8 "CCLSH_PACKAGED_QUICKLISP_TEMPLATE")))
   (setf cclsh:*cclsh-build-commit*          commit
-        cclsh:*cclsh-build-clinedi-commit* clinedi-commit)
+        cclsh:*cclsh-build-clinedi-commit* clinedi-commit
+        cclsh::*packaged-quicklisp-template*
+        (and quicklisp-template
+             (plusp (length quicklisp-template))
+             quicklisp-template))
   (format t "Build commit: ~a~%" (or commit "unknown")))
 
 ;; Keep the heap image separate from the kernel so installers can activate

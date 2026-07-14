@@ -44,6 +44,12 @@
     (unless (ccl:%null-ptr-p pointer)
       (ccl::%get-utf-8-cstring pointer))))
 
+(defun check-path-mode (path)
+  "Return PATH permissions as three or four octal digits."
+  (string-trim '(#\Space #\Tab #\Newline #\Return)
+               (uiop:run-program (list "stat" "-c" "%a" path)
+                                 :output ':string)))
+
 
 ;;;; -- Clinedi boundary --
 
@@ -607,7 +613,21 @@
               (make-array 0 :adjustable t :fill-pointer t))
             (ccl:*default-file-character-encoding* ':iso-8859-1))
         (cclsh:setenv "XDG_CONFIG_HOME" root)
-        (cclsh::history-append text)
+        (let ((old-umask
+                (ccl:external-call "umask"
+                                   :unsigned-int 0
+                                   :unsigned-int)))
+          (unwind-protect
+              (cclsh::history-append text)
+            (ccl:external-call "umask"
+                               :unsigned-int old-umask
+                               :unsigned-int)))
+        (check-equal "history configuration is private"
+                     "700"
+                     (check-path-mode (cclsh::config-directory)))
+        (check-equal "history file is private"
+                     "600"
+                     (check-path-mode (cclsh::history-file)))
         (setf (fill-pointer cclsh::*history*) 0)
         (cclsh::history-load)
         (check-equal "UTF-8 history ignores the ambient file encoding"

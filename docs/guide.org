@@ -7,80 +7,129 @@ between the two is deliberately thin: shell commands are resolvable
 Lisp objects, and Lisp code can orchestrate processes with pipeline
 helpers.
 
+cclsh is not a POSIX shell. Its command strings and scripts do not implement
+sh operator syntax such as =|=, =>= and =<=. Lisp pipeline and redirection
+stages use cclsh's own syntax. Dogfood it as an ordinary shell before
+considering login-shell use.
+
 * Installation
 
+The recommended Linux x86-64 installation is the Nix flake:
+
 #+begin_src sh
-cd ~/common-lisp/cclsh
-scripts/install                  # user copy in ~/.local/bin
-make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
-  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
-sudo make install-login-shell LOGIN_USER=USER
+nix run github:luciusmagn/cclsh -- --version
+nix profile install github:luciusmagn/cclsh
 #+end_src
 
-=scripts/build= puts the matched kernel and saved image in a private,
-content-addressed build release and atomically switches =./cclsh= to it.
-=./cclsh.image= is a convenience link; the kernel always finds the image
-beside its resolved executable. A build lock serializes publishers. An
-interruption therefore leaves either the previous pair or a complete new pair
-active. Inactive releases remain available for rollback and may be removed
-manually after the active symlink and its replacement have both been verified.
-=login-build= holds that lock across patching, a clean CCL kernel build, image
-publication and attestation. It also locks the CCL checkout through its Git
-directory, so another cclsh checkout cannot build the same source tree at the
-same time.
+From a checkout, =nix run .= and =nix profile install .#cclsh= are equivalent.
+The flake pins nixpkgs and Quicklisp metadata, rebuilds CCL 1.13 with both
+required patches, and fetches the Clinedi commit in =dependencies.lock=. Run
+=nix flake check= to build the package and test its installed command boundary
+and Quicklisp state.
 
-Current upstream CCL has a Linux x86-64 signal-frame defect: it copies only
-the 512-byte legacy floating-point state even when Linux supplied a larger
-XSAVE frame. A later =rt_sigreturn= can then be rejected. The
-=ccl-kernel= applies =patches/ccl-linux-xstate.patch= and
-=patches/ccl-cclsh-argv.patch= to a CCL source checkout and builds its kernel.
-It patches that checkout in place and leaves the tracked source changes
-present for inspection and later rebuilds.
-The first validates and copies the complete extended frame with 64-byte
-alignment. The second keeps CCL from consuming its own reserved options after
-cclsh's =-c= or script boundary. =login-build= requires that exact kernel and
-writes an attestation binding both patch hashes to the kernel/image hashes.
-=install-login-shell= rejects missing or stale attestations. The default =ccl=
-remains convenient for ordinary development, but is not accepted as evidence
-of login safety. =login-build= requires =CCL_IMAGE= unless the CCL source
-checkout contains an adjacent =lx86cl64.image=. The build requires
-=~/quicklisp/setup.lisp= and
-the Clinedi checkout recorded in =dependencies.lock=. Clinedi must be
-registered as a Quicklisp local project; add the checkout's parent directory to
-=ql:*local-project-directories*= when it is not directly below
-=~/quicklisp/local-projects/=. Set =CCLSH_QUICKLISP_SETUP= to use a setup file
-elsewhere. An unavailable Quicklisp setup, a dirty or mismatched Clinedi
-checkout, or a wrong local-project resolution stops the build before it saves.
-Before installation, the build boots the staged image under an empty home
-directory and verifies that Quicklisp and Clinedi are already present. You can
-also run the shell from any CCL REPL:
+The Nix package uses an existing =~/quicklisp= when available. Otherwise its
+first shell or command session copies the pinned client and distribution index
+to =${XDG_DATA_HOME:-$HOME/.local/share}/cclsh/quicklisp=. Set
+=CCLSH_QUICKLISP_HOME= to override that writable location. An existing
+override must contain =setup.lisp=; invalid or unwritable targets are reported
+and refused. Interactive and configured command sessions load the selected
+home's =local-init= files. Plain commands, scripts and safe mode do not. Nix
+installs a user command only; it does not edit =/etc/shells= or change an
+account.
+
+For source development, install CCL 1.13, Git, Quicklisp, GNU make and
+coreutils, findutils, grep, awk, util-linux, m4, binutils, and a C toolchain.
+The supported platform is Linux x86-64. Clone and select the exact Clinedi
+dependency:
+
+#+begin_src sh
+git clone https://github.com/luciusmagn/clinedi.git ~/common-lisp/clinedi
+clinedi_commit=$(sed -n 's/^clinedi=//p' dependencies.lock)
+git -C ~/common-lisp/clinedi checkout --detach "$clinedi_commit"
+#+end_src
+
+Add =~/common-lisp/= to Quicklisp's local directories, for example in
+=~/quicklisp/local-init/common-lisp.lisp=:
 
 #+begin_src lisp
+(in-package #:quicklisp-client)
+(pushnew (merge-pathnames #P"common-lisp/" (user-homedir-pathname))
+         *local-project-directories*
+         :test #'equal)
+#+end_src
+
+Set =CCLSH_QUICKLISP_SETUP= if Quicklisp is elsewhere. A missing setup file,
+a non-Git, dirty or mismatched Clinedi checkout, or a different copy selected
+by Quicklisp stops the build. Stock CCL remains useful for checks and unsaved
+REPL development:
+
+#+begin_src sh
+scripts/check
+#+end_src
+
+#+begin_src lisp
+(require :asdf)
 (asdf:load-system "cclsh")
 (cclsh:main)
 #+end_src
 
-=scripts/install= creates an owner-only user copy in =~/.local/bin=. A root
-=make install= without =DESTDIR= is refused because its private image would be
-unusable by ordinary accounts. =make install-login-shell= requires a preceding
-=login-build= and =LOGIN_USER=. That user must be the only account whose
-primary group has its GID, and the group must list no other members. The
-installer verifies that account can start the root-owned candidate in a clean
-environment before activation, then adds the stable path to =/etc/shells=
-under a lock. Registration failure restores the previous release. It does not
-change the account's shell. A stable private-image path belongs to one login
-account; choose another =BINDIR= for another user. Override =PREFIX= or
-=BINDIR= for a different installation path, and =SHELLS_FILE= when packaging
-or testing. Custom system paths must be canonical and have root-owned parent
-directories that are not writable by non-root users. The image retains the
-Quicklisp tree used during its build:
+A standalone image cannot be built with stock CCL. Its kernel must contain
+=ccl-cclsh-argv.patch= so CCL leaves cclsh's =-c= and script operands alone.
+The manual path applies that patch and the Linux xstate fix to an official CCL
+1.13 checkout:
 
 #+begin_src sh
+git clone --branch v1.13 https://github.com/Clozure/ccl.git ../ccl
+make ccl-kernel CCL_SOURCE=../ccl
+make build CCL=../ccl/lx86cl64 \
+  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+make install BINDIR="$HOME/.local/bin"
+#+end_src
+
+The distribution-specific =CCL_IMAGE= must match the source generation.
+=ccl-kernel= patches the checkout in place and leaves its tracked changes for
+inspection. =make build= then publishes a matched kernel and image through a
+private content-addressed release. A build lock and atomic symlink switches
+leave either the old complete pair or the new complete pair active. If stock
+CCL is selected, the final validation fails closed with
+=kernel consumed a cclsh command operand=.
+
+For a rebuild and user-local install in one command:
+
+#+begin_src sh
+CCLSH_CCL=../ccl/lx86cl64 \
+CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
+  scripts/install
+#+end_src
+
+=scripts/install= creates an owner-only copy in =~/.local/bin=. A root
+=make install= without =DESTDIR= is refused. For a login installation, run the
+checks in this order so the attestation is not removed by a later plain build:
+
+#+begin_src sh
+scripts/check
 CCLSH_QUICKLISP_SETUP=/home/USER/quicklisp/setup.lisp \
   make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
+    CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+make integration-check CCL=../ccl/lx86cl64 \
   CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
 sudo make install-login-shell LOGIN_USER=USER
 #+end_src
+
+=login-build= holds both the cclsh and CCL checkout locks while applying the
+patches, rebuilding the kernel, publishing the image, and writing
+=cclsh.attestation=. The attestation binds both patch hashes to the exact
+kernel and image. =install-login-shell= rejects a missing or stale
+attestation, validates the candidate as =LOGIN_USER= before activation, then
+adds the stable root-owned path to =/etc/shells=. Registration failure restores
+the previous release. It never changes an account.
+
+The login user must have a private primary group. One stable path serves one
+login account, so choose another =BINDIR= for another user. =PREFIX=,
+=BINDIR=, =SHELLS_FILE= and =LOGIN_USER= are Make variables. Custom system
+paths must be canonical and have root-owned parents that are not writable by
+non-root users. Manual images retain the Quicklisp tree used for their build;
+that tree must remain present and readable by the login account.
 
 * How a line is interpreted
 
@@ -144,6 +193,8 @@ Details worth knowing:
 - A glob with no matches passes through unchanged, so =echo *.zip= in
   a zipless directory prints =*.zip=.
 - Globs apply only to whole bare words, not to quoted concatenations.
+- =#= does not start a comment in command mode. =echo hello # note= passes
+  both =#= and =note= to =echo=. Lisp forms use ordinary Lisp comments.
 - There is no =|=, =>= or =<= syntax. A =|= in command mode is passed
   to the program as a literal argument. Pipelines are Lisp forms, see
   below.
@@ -155,9 +206,9 @@ value. The outer parens are shell delimiters: a single form inside is
 an expression, several forms become one function call.
 
 #+begin_src sh
-echo (*balls*)                     # the value of *balls*
-echo (+ 1 2)                       # 3
-echo (string-downcase *balls*)     # a call
+echo (*balls*)
+echo (+ 1 2)
+echo (string-downcase *balls*)
 mv draft.txt (format nil "post-~a.txt" (get-universal-time))
 #+end_src
 
@@ -208,10 +259,10 @@ line. The prompt applies the same rule after commands like
 * Environment variables
 
 #+begin_src sh
-export EDITOR=vim PAGER=less     # set, several at a time
-export PATH=$HOME/bin:$PATH      # expansions work in the value
-export EDITOR                    # print one value
-export                           # print the whole environment
+export EDITOR=vim PAGER=less
+export PATH=$HOME/bin:$PATH
+export EDITOR
+export
 unset PAGER
 #+end_src
 
@@ -387,13 +438,17 @@ Ctrl-Z stops the foreground command or pipeline, and =jobs=, =fg= and
 =bg= inspect and resume what the job table holds:
 
 #+begin_src sh
-sleep 300 &            # [1] 12345
-make build             # ... Ctrl-Z
-                       # [2]+  Stopped                 make build
-jobs                   # lists both, + marks the current job
-bg %2                  # make continues in the background
-fg                     # brings the current job back to the terminal
+sleep 300 &
+make build
+jobs
+bg %2
+fg
 #+end_src
+
+The first command prints its job id and process id. Press Ctrl-Z during
+=make build= to create the stopped second job. =jobs= marks the current job
+with =+=, =bg %2= continues it in the background, and =fg= brings the current
+job back to the terminal.
 
 Job specs work like sh: =%1= or plain =1= by id, =%+=, =%%= or === for
 the current job, =%-= for the previous one, and =%text= for the most
@@ -537,22 +592,25 @@ scripting host:
 =quicklisp-setup= remains useful when running cclsh directly from an
 unsaved CCL development image: it loads an existing =~/quicklisp= or
 installs one with curl. =scripts/build= itself never produces an image
-without Quicklisp.
+without Quicklisp. A manually built image retains the pathname of the
+Quicklisp tree used to build it, so keep that tree present and readable. The
+Nix package instead rebases the loaded client to an existing =~/quicklisp= or
+a writable XDG data tree before commands and scripts run.
 
 Scripts run three ways, all skipping =startup.lisp= and history:
 
 #+begin_src sh
-cclsh -c 'echo one shot'      # one command string
-cclsh provision.cclsh         # a script file
-printf 'ls\n(+ 1 2)\nexit\n' | cclsh   # piped standard input
+cclsh -c 'echo one shot'
+cclsh provision.cclsh
+printf 'ls\n(+ 1 2)\nexit\n' | cclsh
 #+end_src
 
 Use a configured command string when the command needs aliases, PATH changes
 or other definitions from =startup.lisp=:
 
 #+begin_src sh
-cclsh -lc 'z project'          # login configuration, then one command
-cclsh -ic 'echo $EDITOR'       # interactive configuration, then one command
+cclsh -lc 'z project'
+cclsh -ic 'echo $EDITOR'
 #+end_src
 
 The short flags can be combined in either order, so =-lc=, =-cl= and
@@ -607,10 +665,14 @@ shell with the same care as always. What is in place:
 Recommendations, in order:
 
 1. Dogfood cclsh from an existing shell first.
-2. Install a root-owned copy and register it:
+2. Run the source checks, build an attested pair, run the integration checks,
+   then install and register it:
 
    #+begin_src sh
+   scripts/check
    make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
+     CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+   make integration-check CCL=../ccl/lx86cl64 \
      CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
    sudo make install-login-shell LOGIN_USER=USER
    #+end_src
@@ -630,10 +692,19 @@ Recommendations, in order:
    #+begin_src sh
    sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
      SHELL=/usr/local/bin/cclsh \
-     /usr/local/bin/cclsh -lc 'zoxide --version'
+     /usr/local/bin/cclsh --version
+   sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
+     SHELL=/usr/local/bin/cclsh CCLSH_SAFE=1 \
+     /usr/local/bin/cclsh -c 'exit 0'
+   sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
+     SHELL=/usr/local/bin/cclsh \
+     /usr/local/bin/cclsh -lc 'echo $PATH'
    sudo chsh -s /usr/local/bin/cclsh USER
    getent passwd USER
    #+end_src
+
+   If startup enables zoxide or another optional tool, probe it separately
+   after these guaranteed checks pass.
 
 5. Keep =root= or another recovery account on a stock shell. Never point
    =/etc/passwd= at repository artifacts, which can disappear after a clean.

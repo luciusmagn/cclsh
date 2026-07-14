@@ -22,6 +22,9 @@ set -- -n -b
 if [ -n "${CCLSH_CCL_IMAGE:-}" ]; then
     set -- -I "$CCLSH_CCL_IMAGE" "$@"
 fi
+# The unit suite exercises job-control state without being an interactive
+# shell. Keep its terminal snapshot empty even when the caller owns a TTY;
+# interactive terminal behavior is covered by scripts/integration-check.
 "$ccl_command" "$@" \
     -e '(setf ccl:*default-file-character-encoding* :utf-8)' \
     -e '(require :asdf)' \
@@ -62,7 +65,7 @@ fi
            (load "tests/check.lisp" :external-format :utf-8))
        (serious-condition (condition)
          (format *error-output* "cclsh check loader failed: ~a~%" condition)
-         (ccl:quit 1)))'
+         (ccl:quit 1)))' </dev/null
 
 tests/argument-boundary.sh
 tests/build-state-rollback.sh

@@ -48,13 +48,17 @@
 (startup--set-default "EDITOR" "vi")
 (startup--set-default "VISUAL" (getenv "EDITOR"))
 
-(defcommand la ()
+(defcommand la (&rest arguments)
   "List all files in long form."
-  (run "ls" "-la"))
+  (apply #'run "ls" "-la" arguments))
 
-(defcommand gd ()
+(defcommand ll (&rest arguments)
+  "List files in long form."
+  (apply #'run "ls" "-l" arguments))
+
+(defcommand gd (&rest arguments)
   "Show the current Git diff."
-  (run "git" "diff"))
+  (apply #'run "git" "diff" arguments))
 
 ;; Zoxide is optional. After installing it, uncomment this to record every
 ;; successful cd and install the z and zi commands.

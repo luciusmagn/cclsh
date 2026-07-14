@@ -58,8 +58,8 @@ immediately. rehash drops all caches.")
   echo pre\"mid dle\"post    one word: premid dlepost
   echo up\\ time            one word: up time
 
-There is no | > or < syntax; a literal | is just an argument.
-Pipelines are Lisp, see pipelines.")
+There is no | > or < syntax; a literal | is just an argument. # does
+not start a command comment either. Pipelines are Lisp, see pipelines.")
 
     ("substitution" "Lisp values inside command lines"
      "Parens inside a command line substitute Lisp values. The outer
@@ -259,7 +259,8 @@ Loading keeps the newest 10000. Blank lines, aborted lines and
 immediate duplicates are skipped. Non-interactive sessions neither
 load nor write history. Multi-line entries recall with their original
 newlines. The newest entry beginning with current input is offered as
-a dim suggestion; Right or C-f accepts it.")
+a dim suggestion; Right or C-f accepts it. Writes keep the cclsh
+configuration directory mode at 0700 and the history file at 0600.")
 
     ("environment" "environment variables, the lispy way"
      "From the command line:
@@ -291,9 +292,9 @@ calls made elsewhere bypass the refresh performed at those boundaries.")
 configured command strings in cclsh-user:
 
   (setenv 'editor \"vim\")
-  (defcommand la ()
+  (defcommand la (&rest arguments)
     \"Long listing including hidden files.\"
-    (run \"ls\" \"-la\"))
+    (apply #'run \"ls\" \"-la\" arguments))
   (defvar *project* \"~/common-lisp/cclsh\")
   (zoxide-setup)
 
@@ -325,6 +326,29 @@ change hook, z and zi. z with no arguments goes home, z - goes to OLDPWD, an
 existing path is entered directly and other arguments query zoxide. zi runs
 zoxide's interactive query. Running setup after zoxide disappears removes
 its stale hook and command bindings.")
+
+    ("install" "a reproducible user installation"
+     "The recommended Linux x86-64 package is the Nix flake:
+
+  nix run github:luciusmagn/cclsh -- --version
+  nix profile install github:luciusmagn/cclsh
+
+From a checkout, use nix run . or nix profile install .#cclsh. The flake
+rebuilds CCL 1.13 with both kernel patches, fetches the exact Clinedi lock
+revision, and includes pinned Quicklisp metadata. nix flake check builds and
+tests the installed result.
+
+The package uses an existing ~/quicklisp or initializes a writable tree below
+${XDG_DATA_HOME:-$HOME/.local/share}/cclsh/quicklisp. Override it with
+CCLSH_QUICKLISP_HOME. Existing overrides must contain setup.lisp; invalid or
+unwritable targets are reported and refused. Interactive and configured
+sessions load local-init files, while plain commands, scripts and safe mode do
+not. The flake does not edit /etc/shells or run chsh.
+
+Source checks can use stock CCL. A standalone saved image cannot: run
+make ccl-kernel against CCL 1.13, then select that rebuilt lx86cl64 and its
+matching boot image for make build. README.org has the complete source and
+login installation sequences.")
 
     ("scripting" "one-shots, scripts and shebangs"
      "Three non-interactive modes, all skipping startup.lisp and
@@ -366,12 +390,26 @@ not sh.")
     ("login" "using cclsh as a login shell"
      "Install and register a root-owned copy outside the repository:
 
+  scripts/check
   make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \\
     CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+  make integration-check CCL=../ccl/lx86cl64 \\
+    CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
   sudo make install-login-shell LOGIN_USER=USER
+
+Before the configured probe and chsh, copy examples/startup.lisp to
+~/.config/cclsh/startup.lisp and make the directory mode 0700 and the file
+mode 0600. Then verify:
+
   sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \\
     SHELL=/usr/local/bin/cclsh \\
-    /usr/local/bin/cclsh -lc 'zoxide --version'
+    /usr/local/bin/cclsh --version
+  sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \\
+    SHELL=/usr/local/bin/cclsh CCLSH_SAFE=1 \\
+    /usr/local/bin/cclsh -c 'exit 0'
+  sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \\
+    SHELL=/usr/local/bin/cclsh \\
+    /usr/local/bin/cclsh -lc 'echo $PATH'
   sudo chsh -s /usr/local/bin/cclsh USER
   getent passwd USER
 
@@ -386,8 +424,11 @@ previous release. It never changes an account. USER must have a private
 primary group, and one stable path can serve only one login account. Use a
 different BINDIR for another account.
 
-Nothing sources /etc/profile for you. Copy examples/startup.lisp and
-keep /usr/local/bin, /usr/bin and /bin in PATH.
+Probe optional startup tools such as zoxide separately after the guaranteed
+version, safe command and configured PATH checks pass.
+
+Nothing sources /etc/profile for you. Keep /usr/local/bin, /usr/bin and /bin
+in PATH.
 
 Keep root on a stock shell. Emergency access past broken user state:
 

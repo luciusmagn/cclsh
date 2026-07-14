@@ -194,9 +194,10 @@ transition.  MONITOR and LOCK are private lifecycle machinery."
             (process--system-error path "open" code)
             descriptor)))))
 
-(defun fd-open-output (path &key append)
+(defun fd-open-output (path &key append (mode #o666))
   "Open PATH for output with close-on-exec and return its descriptor.
-Existing files are truncated unless APPEND is true."
+Existing files are truncated unless APPEND is true. MODE supplies the
+permissions for a newly created file, before the process umask."
   (let ((path (namestring path))
         (flags (logior +process-o-write-only+
                        +process-o-create+
@@ -211,11 +212,39 @@ Existing files are truncated unless APPEND is true."
              (external-call "open"
                             :address encoded
                             :int flags
-                            :unsigned-int #o666
+                            :unsigned-int mode
                             :int)))
         (if (minusp descriptor)
             (process--system-error path "open" code)
             descriptor)))))
+
+(defun fd-set-mode (descriptor mode)
+  "Set DESCRIPTOR permissions to MODE."
+  (multiple-value-bind (result code)
+      (process--call-retrying-interrupts
+       (lambda ()
+         (external-call "fchmod"
+                        :int descriptor
+                        :unsigned-int mode
+                        :int)))
+    (unless (zerop result)
+      (process--system-error descriptor "set permissions" code)))
+  (values))
+
+(defun path-set-mode (path mode)
+  "Set PATH permissions to MODE."
+  (let ((path (namestring path)))
+    (ccl::with-utf-8-cstr (encoded path)
+      (multiple-value-bind (result code)
+          (process--call-retrying-interrupts
+           (lambda ()
+             (external-call "chmod"
+                            :address encoded
+                            :unsigned-int mode
+                            :int)))
+        (unless (zerop result)
+          (process--system-error path "set permissions" code)))))
+  (values))
 
 (defun fd-input-stream (descriptor &key (auto-close t))
   "Wrap DESCRIPTOR in a UTF-8 character input stream."

@@ -4,19 +4,63 @@
 A system shell running inside Clozure CL. Every command line is either a
 Unix command or a Lisp form, evaluated in a live CCL image.
 
-* Requirements
+This is not a POSIX shell. Command strings, scripts, pipelines and redirection
+use cclsh syntax. Try it as an ordinary shell before considering login-shell
+use.
 
-- Clozure CL (=ccl= in PATH)
-- Git (verifies the pinned Clinedi checkout)
-- Quicklisp (=~/quicklisp/setup.lisp= by default)
-- Clinedi at the revision recorded in =dependencies.lock=, registered as a
-  Quicklisp local project
-- zoxide (optional directory ranking; =fzf= is also needed for =zi=)
-- Linux (terminal control talks to libc termios/ioctl directly)
+* Installation
 
-Clinedi supplies the Unicode-aware terminal line editor. For sibling checkouts
-below =~/common-lisp/=, add that parent to Quicklisp before registering local
-projects, for example in =~/quicklisp/local-init/common-lisp.lisp=:
+** Nix flake (recommended)
+
+The reproducible package supports Linux x86-64 and needs only Nix with flakes
+enabled:
+
+#+begin_src sh
+nix run github:luciusmagn/cclsh -- --version
+nix profile install github:luciusmagn/cclsh
+cclsh --version
+#+end_src
+
+From a checkout, use =nix run .= or =nix profile install .#cclsh=. The flake
+rebuilds CCL 1.13 with both required kernel patches, fetches the exact Clinedi
+revision in =dependencies.lock=, and includes a pinned Quicklisp client and
+distribution index. =nix flake check= builds the complete package and checks
+its command boundary and installed Quicklisp state.
+
+A packaged image uses an existing =~/quicklisp= when one is present. Otherwise
+it initializes a writable tree under
+=${XDG_DATA_HOME:-$HOME/.local/share}/cclsh/quicklisp= on first use. Set
+=CCLSH_QUICKLISP_HOME= to choose another location. Quicklisp downloads and
+compiled files use that writable tree rather than the read-only Nix store.
+An explicit target that already exists must contain =setup.lisp=; an invalid
+or unwritable target is reported and refused.
+
+Normal interactive sessions and configured =-lc=/=-ic= commands load the
+selected Quicklisp home's =local-init= files. Plain =-c=, scripts and safe mode
+do not execute them, preserving their user-state-free behavior.
+
+The flake installs an ordinary user command. It deliberately does not edit
+=/etc/shells= or run =chsh=. A Nix profile symlink is not the attested,
+root-owned stable path required by the login-shell installer below.
+
+** Building from source
+
+Source development is tested on Linux x86-64 with CCL 1.13. It requires Git,
+Quicklisp, GNU make, coreutils, findutils, grep, awk, util-linux, m4, binutils,
+and a C toolchain. Login installation also uses =flock=, =runuser= and
+=getent=. Clone Clinedi and check out the locked revision:
+
+#+begin_src sh
+git clone https://github.com/luciusmagn/clinedi.git ~/common-lisp/clinedi
+clinedi_commit=$(sed -n 's/^clinedi=//p' dependencies.lock)
+git -C ~/common-lisp/clinedi checkout --detach "$clinedi_commit"
+#+end_src
+
+zoxide is optional. Install =fzf= as well when using its interactive =zi=
+command.
+
+Register the checkout's parent with Quicklisp, for example in
+=~/quicklisp/local-init/common-lisp.lisp=:
 
 #+begin_src lisp
 (in-package #:quicklisp-client)
@@ -25,89 +69,86 @@ projects, for example in =~/quicklisp/local-init/common-lisp.lisp=:
          :test #'equal)
 #+end_src
 
-Quicklisp is also a build dependency: every saved cclsh image includes it,
-so =(ql:quickload ...)= works out of the box. Set
-=CCLSH_QUICKLISP_SETUP= when its =setup.lisp= is installed somewhere
-other than =~/quicklisp/setup.lisp=. The build stops before saving an image if
-Quicklisp is unavailable, Clinedi resolves outside its registered local
-checkout, or the checkout is dirty or differs from =dependencies.lock=.
+Set =CCLSH_QUICKLISP_SETUP= when =setup.lisp= is not at
+=~/quicklisp/setup.lisp=. Every saved image includes Quicklisp and Clinedi.
+The build refuses a missing Quicklisp setup, a non-Git Clinedi source, a dirty
+checkout, a revision mismatch, or a different copy selected by Quicklisp.
 
-* Building and installation
+Stock CCL is enough for regression checks and unsaved REPL development:
 
 #+begin_src sh
-make build
+scripts/check
 #+end_src
-
-This produces a matched =cclsh= kernel executable and =cclsh.image=
-heap image in the repository root. The build accepts =CCL= and =CCL_IMAGE=
-Make variables when the kernel and boot image do not come from the same
-installed =ccl= command.
-
-Current upstream CCL truncates Linux x86-64 extended signal state when it
-moves a signal frame between stacks. That can make Linux reject
-=rt_sigreturn=, so an unpatched kernel is not suitable for login-shell duty.
-This repository carries a modernized full-XSAVE fix based on CCL's earlier
-upstream work. With a sibling CCL checkout:
-
-#+begin_src sh
-make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
-  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
-#+end_src
-
-The boot-image path is distribution-specific. =ccl-linux-xstate.patch=
-validates and copies the complete aligned signal state. See CCL issue 85 and
-upstream commit =b1a59e443344f6f79d1069e1902de5d04c14e2e3= for the original
-diagnosis. =ccl-cclsh-argv.patch= makes CCL stop consuming kernel options at
-cclsh's own option boundary, so script =*argv*= remains literal.
-=login-build= applies both patches, builds through that exact source kernel,
-then writes =cclsh.attestation= binding both artifact and patch hashes. It
-serializes the full CCL rebuild, image publication and attestation. Set
-=CCL_IMAGE= when the source checkout has no adjacent =lx86cl64.image=.
-It patches the supplied CCL checkout in place and leaves those tracked source
-changes present for inspection and subsequent rebuilds.
-
-Alternatively, for non-login development from a running CCL:
 
 #+begin_src lisp
+(require :asdf)
 (asdf:load-system "cclsh")
 (cclsh:main)
 #+end_src
 
-For a user-local copy, including a rebuild and staged validation:
+A standalone saved image additionally requires a rebuilt CCL kernel containing
+=ccl-cclsh-argv.patch=. The supported manual path applies both repository
+patches to an official CCL 1.13 source checkout:
 
 #+begin_src sh
-scripts/install                         # ~/.local/bin/cclsh
+git clone --branch v1.13 https://github.com/Clozure/ccl.git ../ccl
+make ccl-kernel CCL_SOURCE=../ccl
+make build CCL=../ccl/lx86cl64 \
+  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+make install BINDIR="$HOME/.local/bin"
 #+end_src
 
-For a root-owned login-shell installation:
+The boot image path is distribution-specific and must match the CCL source
+generation. =ccl-kernel= patches the supplied checkout in place and leaves the
+tracked changes for inspection. =ccl-cclsh-argv.patch= preserves cclsh command
+and script operands. =ccl-linux-xstate.patch= validates and copies the complete
+aligned Linux x86-64 signal state; see CCL issue 85 and upstream commit
+=b1a59e443344f6f79d1069e1902de5d04c14e2e3= for the original diagnosis.
+
+=make build= produces a matched =cclsh= kernel and =cclsh.image= in the
+repository. It intentionally rejects stock CCL with
+=kernel consumed a cclsh command operand=. Run =make ccl-kernel= and select
+that rebuilt kernel instead. After a successful build, =make install= copies
+the already validated pair. To rebuild and install in one user-local command,
+pass the same kernel explicitly:
 
 #+begin_src sh
+CCLSH_CCL=../ccl/lx86cl64 \
+CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
+  scripts/install
+#+end_src
+
+** Root-owned login-shell installation
+
+Run checks, build an attested pair, and preserve that attestation through the
+integration checks:
+
+#+begin_src sh
+scripts/check
 CCLSH_QUICKLISP_SETUP=/home/USER/quicklisp/setup.lisp \
   make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
     CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+make integration-check CCL=../ccl/lx86cl64 \
+  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
 sudo make install-login-shell LOGIN_USER=USER
-sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
-  SHELL=/usr/local/bin/cclsh /usr/local/bin/cclsh -lc 'zoxide --version'
-sudo chsh -s /usr/local/bin/cclsh USER  # change one account explicitly
 #+end_src
 
-=install-login-shell= prepares a content-addressed kernel/image release,
-validates it as =LOGIN_USER= before activation, switches the stable symlink,
-then updates =/etc/shells=. A registration failure restores the previous
-release. It refuses an unattested build and does not change any account. The
-unprivileged build retains its Quicklisp tree; the privileged step only
-installs already validated artifacts and makes the saved image readable by
-root and =LOGIN_USER=, not every local account. This requires =LOGIN_USER= to
-have a private primary group. One stable path serves one login account; use a
-different =BINDIR= for another account. The installer rejects a shared group,
-an existing different login owner and owner-only updates of a registered
-login shell.
-=PREFIX=, =BINDIR=, =SHELLS_FILE= and =LOGIN_USER= are Make variables. Keep
-another account, especially =root=, on a stock shell.
-For a custom system destination or =SHELLS_FILE=, every parent must be
-canonical, root-owned and not writable by non-root users.
+=login-build= applies both patches, performs a clean CCL kernel build through
+that exact checkout, publishes the saved image, and writes
+=cclsh.attestation= over the patch and artifact hashes. Do not run a plain
+=scripts/build= afterward because a non-login build removes the attestation.
 
-Copy the sanitized starter configuration and make it private:
+=install-login-shell= validates the root-owned candidate as =LOGIN_USER=
+before activation, switches a content-addressed release atomically, then adds
+the stable path to =/etc/shells=. It refuses a missing or stale attestation and
+never changes an account. Registration failure restores the previous release.
+The target user must have a private primary group. One stable path serves one
+login account; use another =BINDIR= for another account. =PREFIX=, =BINDIR=,
+=SHELLS_FILE= and =LOGIN_USER= are Make variables. Custom system paths must
+have canonical, root-owned parents that are not writable by non-root users.
+
+Before probing configured mode, copy the sanitized starter configuration and
+make it private:
 
 #+begin_src sh
 mkdir -p ~/.config/cclsh
@@ -116,6 +157,22 @@ chmod 700 ~/.config/cclsh
 chmod 600 ~/.config/cclsh/startup.lisp
 #+end_src
 
+Probe guaranteed behavior before changing the account. Test optional tools
+such as zoxide separately when they are configured:
+
+#+begin_src sh
+sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
+  SHELL=/usr/local/bin/cclsh /usr/local/bin/cclsh --version
+sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
+  SHELL=/usr/local/bin/cclsh CCLSH_SAFE=1 \
+  /usr/local/bin/cclsh -c 'exit 0'
+sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
+  SHELL=/usr/local/bin/cclsh /usr/local/bin/cclsh -lc 'echo $PATH'
+sudo chsh -s /usr/local/bin/cclsh USER
+#+end_src
+
+Keep another account, especially =root=, on a stock shell.
+
 Run the regression checks with:
 
 #+begin_src sh
@@ -123,11 +180,16 @@ scripts/check
 #+end_src
 
 After process, pipeline or terminal changes, rebuild the saved image and
-run the PTY integration checks too:
+run the PTY integration checks too. For an attested login build, use the
+=login-build= and =make integration-check= sequence above:
 
 #+begin_src sh
-scripts/build
-scripts/integration-check
+CCLSH_CCL=../ccl/lx86cl64 \
+CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
+  scripts/build
+CCLSH_CCL=../ccl/lx86cl64 \
+CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
+  scripts/integration-check
 #+end_src
 
 * Behavior
@@ -154,7 +216,8 @@ scripts/integration-check
   evaluation can obscure them.
 - =~/.config/cclsh/startup.lisp= is loaded for interactive sessions and
   configured one-shots, history persists in =~/.config/cclsh/history=
-  (=XDG_CONFIG_HOME= is respected).
+  (=XDG_CONFIG_HOME= is respected). cclsh keeps the configuration directory
+  mode at =0700= and the history file at =0600= when it writes history.
 - The built-in prompt shows =username@hostname=, the current Lisp package,
   directory and status sigil. Set =*prompt-function*= in =startup.lisp= to
   supply any other prompt policy or external renderer.
