@@ -4,6 +4,9 @@
 /cclsh.image.new
 /.cclsh-build.lock
 /.cclsh-build-releases/
+/.cclsh-build-transaction.*/
+/.cclsh-build-validation-home.*/
+/.cclsh-state-transaction.*/
 /cclsh.attestation
 *.lx64fsl
 *.lx32fsl
