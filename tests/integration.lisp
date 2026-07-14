@@ -275,6 +275,19 @@ printf '%s\\n' $$ > \"$CCLSH_TEST_ROOT/spawn.pid\"
 exec sleep 30
 ")
   (integration-write-program
+   "exit-observer"
+   "#!/bin/sh
+name=$1
+mode=${2:-running}
+prefix=$CCLSH_TEST_ROOT/exit-$name
+trap 'printf \"HUP\\n\" >> \"$prefix.events\"; exit 0' HUP
+printf '%s\\n' $$ > \"$prefix.pid\"
+if test \"$mode\" = stopped; then
+    kill -STOP $$
+fi
+while :; do sleep 1; done
+")
+  (integration-write-program
    "bounded-session"
    "#!/bin/sh
 sidfile=$1
@@ -1252,6 +1265,67 @@ exit 0
   "True when PID still names a process visible to this user."
   (zerop (ccl:external-call "kill" :int pid :int 0 :int)))
 
+(defun integration-check-exit-observer (name)
+  "Require exit observer NAME to have received HUP and terminated."
+  (let* ((prefix      (integration-path (format nil "exit-~a" name)))
+         (pid-path    (concatenate 'string prefix ".pid"))
+         (events-path (concatenate 'string prefix ".events")))
+    (integration-ensure (probe-file pid-path)
+                        "exit observer ~a never recorded its pid" name)
+    (let ((pid
+            (parse-integer
+             (string-trim '(#\space #\tab #\newline #\return)
+                          (integration-read-file pid-path)))))
+      (unwind-protect
+          (progn
+            (loop repeat 40
+                  until (and (probe-file events-path)
+                             (not (integration-process-alive-p pid)))
+                  do (integration-delay 0.05))
+            (integration-ensure
+             (and (probe-file events-path)
+                  (integration-contains-p
+                   "HUP" (integration-read-file events-path)))
+             "exit observer ~a did not receive SIGHUP" name)
+            (integration-ensure
+             (not (integration-process-alive-p pid))
+             "exit observer ~a survived shell shutdown as pid ~d"
+             name pid))
+        (when (integration-process-alive-p pid)
+          (ccl:external-call "kill" :int (- pid) :int 9 :int))))))
+
+(defun integration-check-job-exit-signals ()
+  "Require orderly exit to hang up running and confirmed stopped jobs."
+  (let* ((running-input
+           (integration-write-file
+            (integration-path "exit-running.cclsh")
+            (format nil "exit-observer running &~%sleep 1~%")))
+         (running-result
+           (integration-run-arguments nil :input running-input :timeout 5)))
+    (integration-require-success running-result "running job shell exit")
+    (integration-check-exit-observer "running"))
+  (let* ((stopped-input
+           (integration-write-file
+            (integration-path "exit-stopped.cclsh")
+            (format nil "exit-observer stopped stopped &~%~
+                         sleep 1~%exit~%exit 0~%")))
+         (stopped-result
+           (integration-run-arguments nil :input stopped-input :timeout 5)))
+    (integration-require-success stopped-result "stopped job shell exit")
+    (let* ((warning "there are stopped jobs")
+           (error-output (direct-result-error-output stopped-result))
+           (warning-count
+             (loop with start = 0
+                   for found = (search warning error-output :start2 start)
+                   while found
+                   count found
+                   do (setf start (+ found (length warning))))))
+      (integration-ensure
+       (= warning-count 1)
+       "stopped job confirmation printed ~d warnings instead of one: ~a"
+       warning-count (integration-tail error-output)))
+    (integration-check-exit-observer "stopped")))
+
 (defun integration-check-failure-cleanup ()
   "Require redirect and spawn failures to leave no children or effects."
   (let* ((marker (integration-path "side-effect"))
@@ -1881,6 +1955,8 @@ exit 0
                         #'integration-check-dev-full)
       (integration-test "redirect exact arity"
                         #'integration-check-redirect-arity)
+      (integration-test "orderly exit job signals"
+                        #'integration-check-job-exit-signals)
       (integration-test "spawn and redirect cleanup"
                         #'integration-check-failure-cleanup)
       (integration-test "PTY jobs, signals and terminal modes"

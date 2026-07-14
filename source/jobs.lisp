@@ -9,6 +9,9 @@
 
 (in-package #:cclsh)
 
+(defconstant +job-sighup+ 1
+  "Linux SIGHUP signal number used when the shell exits.")
+
 ;;; The job table
 
 (define-condition job-control-error (error)
@@ -649,12 +652,71 @@
 
 ;;; Exit protection
 
+(defvar *jobs-exit-signaled* nil
+  "True after orderly shell shutdown has signaled registered jobs.")
+
+(defun job--owned-live-process-group-p (job shell-process-group)
+  "True when JOB still owns a live group distinct from the shell group.
+   Every spawned job uses its first process as its group leader. Requiring
+   that identity and at least one live tracked process prevents shutdown
+   from signaling an absent, malformed or already completed group."
+  (let ((process-group (job-process-group job))
+        (processes     (job-processes job)))
+    (and (integerp process-group)
+         (plusp process-group)
+         (/= process-group shell-process-group)
+         processes
+         (= process-group (shell-process-pid (first processes)))
+         (find-if (lambda (process)
+                    (not (eq (shell-process-live-state process) ':done)))
+                  processes)
+         t)))
+
+(defun job--signal-exit (job shell-process-group)
+  "Send orderly exit signals to one registered JOB.
+   Live groups receive SIGHUP. A stopped group then receives SIGCONT so it
+   can act on the hangup instead of remaining suspended. In-process tasks
+   are aborted separately because they are not members of the Unix group."
+  (let ((status
+          (handler-case
+              (job-refresh job)
+            (error ()
+              (job-status job)))))
+    (cond ((eq status ':done)
+           (when (job-id job)
+             (job-unregister job)))
+          (t
+           (when (job--owned-live-process-group-p job shell-process-group)
+             (ignore-errors
+               (job--signal-group job +job-sighup+ :missing-ok t))
+             (when (eq status ':stopped)
+               (ignore-errors
+                 (job--signal-group job +sigcont+ :missing-ok t))))
+           (ignore-errors
+             (job--control-auxiliaries job ':abort)))))
+  (values))
+
+(defun jobs--signal-exit ()
+  "Signal every registered live job once before orderly shell exit.
+   Shutdown is best effort: one stale or failing job must not keep the shell
+   alive, and only groups whose leader and live members are still tracked are
+   addressed."
+  (unless *jobs-exit-signaled*
+    (setf *jobs-exit-signaled* t)
+    (let ((shell-process-group (terminal-own-process-group)))
+      (dolist (job (copy-list *jobs*))
+        (handler-case
+            (job--signal-exit job shell-process-group)
+          (serious-condition () nil)))))
+  (values))
+
 (defun shell-quit (status)
-  "Leave the shell with STATUS. A caller like cclsh -c ... | head can
-   close standard output early, making the exit-time stream flush
-   signal on the broken pipe; the error handler then falls back to a
-   hard exit instead of dropping the dying image into an endless
-   break loop."
+  "Signal registered jobs and leave the shell with STATUS.
+   A caller like cclsh -c ... | head can close standard output early,
+   making the exit-time stream flush signal on the broken pipe; the error
+   handler then falls back to a hard exit instead of dropping the dying
+   image into an endless break loop."
+  (jobs--signal-exit)
   (quit status :error-handler (lambda (condition)
                                 (declare (ignore condition))
                                 (external-call "_exit" :int status))))
