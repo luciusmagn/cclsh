@@ -243,15 +243,14 @@
         cclsh:*cclsh-build-clinedi-commit* clinedi-commit)
   (format t "Build commit: ~a~%" (or commit "unknown")))
 
-;; Keep the heap image separate from the kernel. On current Linux,
-;; CCL 1.13's prepended-kernel image can intermittently resume through
-;; an invalid rt_sigreturn frame. The ordinary adjacent-image startup
-;; path does not have that failure. scripts/build atomically installs
-;; the matched kernel and image after both files exist.
+;; Keep the heap image separate from the kernel so installers can activate
+;; a matched, content-addressed pair atomically. scripts/build installs the
+;; local pair only after both files exist and the saved image validates.
 (build-verify-clinedi-identity)
 (format t "Copying the CCL kernel...~%")
 (uiop:copy-file (truename "/proc/self/exe") "cclsh.new")
 (format t "Saving cclsh image...~%")
 (ccl:save-application "cclsh.image.new"
                       :toplevel-function #'cclsh:shell-toplevel
-                      :prepend-kernel nil)
+                      :prepend-kernel nil
+                      :mode #o600)

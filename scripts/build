@@ -1,15 +1,27 @@
 #!/bin/sh
-# Build a matched CCL kernel and saved image. The kernel finds the
-# adjacent cclsh.image by its own basename. New files are renamed only
-# after both are complete, so an interrupted build preserves the old pair.
-set -e
+# Build a matched CCL kernel and saved image. Each complete pair lives in a
+# private release directory; one symlink rename activates its kernel.
+set -eu
+umask 077
 cd "$(dirname "$0")/.."
+if ! scripts/build-lock-held; then
+    exec scripts/with-build-lock scripts/build "$@"
+fi
 validation_home=
+build_staging=
+temporary_link=
+
 cleanup_staged_build()
 {
     rm -f cclsh.new cclsh.image.new
     if [ -n "$validation_home" ]; then
         rm -rf -- "$validation_home"
+    fi
+    if [ -n "$build_staging" ]; then
+        rm -rf -- "$build_staging"
+    fi
+    if [ -n "$temporary_link" ]; then
+        rm -f -- "$temporary_link"
     fi
 }
 trap cleanup_staged_build 0
@@ -17,7 +29,17 @@ trap 'exit 129' 1
 trap 'exit 130' 2
 trap 'exit 143' 15
 cleanup_staged_build
-ccl -n -b \
+rm -f cclsh.attestation
+ccl_command=${CCLSH_CCL:-ccl}
+if ! command -v "$ccl_command" >/dev/null 2>&1; then
+    echo "cclsh build: CCL executable not found: $ccl_command" >&2
+    exit 1
+fi
+set -- -n -b
+if [ -n "${CCLSH_CCL_IMAGE:-}" ]; then
+    set -- -I "$CCLSH_CCL_IMAGE" "$@"
+fi
+"$ccl_command" "$@" \
     -e '(setf ccl:*default-file-character-encoding* :utf-8)' \
     -e \
     '(handler-case
@@ -108,9 +130,53 @@ then
     echo "cclsh build: staged saved-image validation failed" >&2
     exit 1
 fi
-mv -f cclsh.image.new cclsh.image
-mv -f cclsh.new cclsh
+release_id=$(
+    sha256sum cclsh.new cclsh.image.new |
+        cut -d ' ' -f 1 |
+        sha256sum |
+        cut -c 1-20
+)
+releases_directory=.cclsh-build-releases
+release_directory="$releases_directory/$release_id"
+install -d -m 700 "$releases_directory"
+if [ -d "$release_directory" ]; then
+    if [ ! -f "$release_directory/cclsh" ] ||
+       [ ! -f "$release_directory/cclsh.image" ] ||
+       ! cmp -s cclsh.new "$release_directory/cclsh" ||
+       ! cmp -s cclsh.image.new "$release_directory/cclsh.image"
+    then
+        echo "cclsh build: existing release is damaged: $release_directory" >&2
+        exit 1
+    fi
+    chmod 700 "$release_directory"
+    chmod 755 "$release_directory/cclsh"
+    chmod 600 "$release_directory/cclsh.image"
+    rm -f cclsh.new cclsh.image.new
+else
+    build_staging=$(mktemp -d "$releases_directory/.release.XXXXXX")
+    mv cclsh.new "$build_staging/cclsh"
+    mv cclsh.image.new "$build_staging/cclsh.image"
+    chmod 700 "$build_staging"
+    chmod 755 "$build_staging/cclsh"
+    chmod 600 "$build_staging/cclsh.image"
+    sync -f "$build_staging/cclsh"
+    sync -f "$build_staging/cclsh.image"
+    sync -f "$build_staging"
+    mv -T "$build_staging" "$release_directory"
+    build_staging=
+    sync -f "$releases_directory"
+fi
+
+temporary_link=.cclsh-build-kernel-link.$$
+ln -s "$release_directory/cclsh" "$temporary_link"
+mv -Tf "$temporary_link" cclsh
+temporary_link=
+temporary_link=.cclsh-build-image-link.$$
+ln -s "$release_directory/cclsh.image" "$temporary_link"
+mv -Tf "$temporary_link" cclsh.image
+temporary_link=
+sync -f .
 rm -rf -- "$validation_home"
 validation_home=
 trap - 0 1 2 15
-echo "Built ./cclsh and ./cclsh.image"
+echo "Built ./cclsh release $release_id and ./cclsh.image"

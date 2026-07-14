@@ -1,0 +1,19 @@
+#!/bin/sh
+# Succeed only when file descriptor 9 owns this checkout's build lock.
+set -eu
+cd "$(dirname "$0")/.."
+
+expected_lock=$(realpath -m .cclsh-build.lock)
+if [ "${CCLSH_BUILD_LOCK_PATH:-}" != "$expected_lock" ] ||
+   [ ! -f "$expected_lock" ] ||
+   [ -L "$expected_lock" ] ||
+   [ ! -e "/proc/$$/fd/9" ] ||
+   [ "$(stat -Lc %d:%i "/proc/$$/fd/9" 2>/dev/null || true)" != \
+     "$(stat -Lc %d:%i "$expected_lock")" ]
+then
+    exit 1
+fi
+
+# This is idempotent when descriptor 9 already owns the lock. If a caller
+# merely inherited the descriptor, it acquires the lock before returning.
+flock -n 9

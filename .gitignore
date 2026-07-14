@@ -2,6 +2,9 @@
 /cclsh.new
 /cclsh.image
 /cclsh.image.new
+/.cclsh-build.lock
+/.cclsh-build-releases/
+/cclsh.attestation
 *.lx64fsl
 *.lx32fsl
 *.dx64fsl
