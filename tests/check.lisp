@@ -63,6 +63,17 @@
   (format t "~s~%" arguments)
   41)
 
+(cclsh:defcommand check-run-program (program &rest arguments)
+  "Run external PROGRAM for dynamic pipeline-context checks."
+  (apply #'cclsh:run program arguments))
+
+(cclsh:defcommand check-run-order ()
+  "Mix Lisp and child output without manually flushing either stream."
+  (write-string "before|")
+  (cclsh:run "/usr/bin/printf" "child|")
+  (write-string "after|")
+  0)
+
 
 ;;;; -- Clinedi boundary --
 
@@ -441,6 +452,42 @@
         (uiop:delete-directory-tree root
                                     :validate t
                                     :if-does-not-exist ':ignore)))))
+
+
+;;;; -- Pipeline-aware run --
+
+(multiple-value-bind (text status)
+    (cclsh:capture
+      ("/usr/bin/printf" "nested-input")
+      (check-run-program "/usr/bin/cat"))
+  (check-equal "run in builtin inherits pipeline input and output"
+               "nested-input"
+               text)
+  (check-equal "run in builtin retains successful pipeline status"
+               0 status))
+
+(multiple-value-bind (text status)
+    (cclsh:capture
+      (check-run-program "/bin/sh" "-c" "printf nested-error >&2")
+      (merge-error))
+  (check-equal "run in builtin inherits merged standard error"
+               "nested-error"
+               text)
+  (check-equal "merged nested run retains successful status"
+               0 status))
+
+(multiple-value-bind (text status)
+    (cclsh:capture
+      (check-run-program "/bin/sh" "-c" "exit 37"))
+  (check-equal "nonzero nested run produces no capture" "" text)
+  (check-equal "nested run status becomes builtin stage status" 37 status))
+
+(multiple-value-bind (text status)
+    (cclsh:capture (check-run-order))
+  (check-equal "nested run preserves Lisp and child output order"
+               "before|child|after|"
+               text)
+  (check-equal "ordered nested run retains successful status" 0 status))
 
 
 ;;;; -- Implicit directory commands --
@@ -956,6 +1003,20 @@
 
 
 ;;;; -- Job aggregation --
+
+(let ((process (cclsh::process--make 1)))
+  (check-equal "new process starts at transition generation zero"
+               '(:running nil 0)
+               (multiple-value-list (cclsh::shell-process-status process)))
+  (cclsh::process--publish-state
+   process ':stopped cclsh::+process-sigtstp+)
+  (check-equal "process stop advances its transition generation"
+               (list ':stopped cclsh::+process-sigtstp+ 1)
+               (multiple-value-list (cclsh::shell-process-status process)))
+  (cclsh::process--publish-state process ':running nil)
+  (check-equal "process continuation advances its transition generation"
+               '(:running nil 2)
+               (multiple-value-list (cclsh::shell-process-status process))))
 
 (check-equal "stopped external group wins over a live Lisp task"
              ':stopped

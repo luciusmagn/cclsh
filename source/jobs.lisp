@@ -90,6 +90,12 @@
   "Display text for the job a command execution is about to start,
    bound around dispatch so stopped jobs list the line as typed.")
 
+(defvar *run-external-executor* nil
+  "Dynamically bound external executor for RUN, or NIL for a new job.
+
+Pipeline builtin workers bind this to an executor which joins the surrounding
+pipeline job and inherits that stage's prepared standard descriptors.")
+
 (defun job-touch (job)
   "Stamp JOB as the most recently handled job."
   (setf (job-touched job) (incf *jobs-touch-counter*))
@@ -870,7 +876,9 @@
 (defun run (program &rest arguments)
   "Run PROGRAM with ARGUMENTS in the foreground and return its exit
    status. PROGRAM is a symbol or a string, arguments are stringified
-   with PRINC-TO-STRING. Signals COMMAND-NOT-FOUND-ERROR."
+   with PRINC-TO-STRING. When called synchronously by a builtin PIPE or
+   CAPTURE stage, an external PROGRAM inherits that stage's standard
+   descriptors and process group. Signals COMMAND-NOT-FOUND-ERROR."
   (let ((name  (command-designator-name program))
         (words (mapcar #'princ-to-string arguments)))
     (multiple-value-bind (kind target)
@@ -879,5 +887,7 @@
         (command-status-record
          (ecase kind
            (:builtin  (command-execute-builtin target words))
-           (:external (command-execute-external target words))
+           (:external (if *run-external-executor*
+                          (funcall *run-external-executor* target words)
+                          (command-execute-external target words)))
            (:unknown  (error 'command-not-found-error :name name))))))))

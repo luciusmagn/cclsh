@@ -139,6 +139,13 @@ An integer return value becomes the exit status, anything else means
   (run 'git \"log\" \"-1\")    symbols work too
   (cmd git \"diff\" file)    macro, head resolves like a command word
 
+Normally run creates its own foreground job. When a defcommand calls
+run synchronously as a pipe or capture stage, run dynamically inherits
+that stage's input, output and error and joins the surrounding pipeline
+job. External-program wrappers therefore preserve piping, redirection,
+Ctrl-C, Ctrl-Z and fg. Direct CCL:RUN-PROGRAM calls and separately
+created Lisp threads bypass this inheritance.
+
 Builtins: cd (with -), exit, export, unset, rehash, commands, help,
 jobs, fg, bg and zoxide-setup. Saved cclsh images include Quicklisp;
 quicklisp-setup loads or installs it when running from an unsaved development
@@ -163,6 +170,10 @@ flags and use glob for explicit filesystem expansion:
 
   (defcommand emit () (format t \"b~%a~%\") 0)
   (pipe (emit) (sort))                 builtins can sit in pipes
+
+A synchronous run inside a builtin stage inherits that stage's
+standard streams and pipeline job. This makes defcommand wrappers
+around external programs compose with pipe, capture and redirection.
 
 glob applies the same ~, environment-variable, * and ? expansion as a
 bare command word and returns the matches as an ordinary list. Matches
@@ -309,6 +320,9 @@ configured command strings in cclsh-user:
     (apply #'run \"ls\" \"-la\" arguments))
   (defvar *project* \"~/common-lisp/cclsh\")
   (zoxide-setup)
+
+The run wrapper above remains pipeline-safe: when la is a pipe or
+capture stage, its child inherits the stage's streams and job control.
 
 A broken startup file prints its error and the shell starts anyway.
 CCLSH_SAFE=1 skips startup.lisp and history entirely, the escape hatch

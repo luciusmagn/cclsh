@@ -311,7 +311,10 @@ Scalars make one argument, NIL vanishes, and proper lists splice one level.
 =(glob pattern...)= returns such a list using command-mode expansion rules;
 unmatched patterns remain literal, while ordinary strings never glob. =run=
 keeps ordinary function-call semantics, so use =apply= to spread a list into
-its arguments.
+its arguments. When a =defcommand= stage calls =run= synchronously inside
+=pipe= or =capture=, =run= dynamically inherits that stage's standard streams
+and joins the surrounding pipeline job. External-program wrappers therefore
+compose with pipelines, redirection and job control.
 
 =*last-status*= holds the exit status of the last command.
 

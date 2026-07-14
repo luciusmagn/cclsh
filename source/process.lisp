@@ -101,13 +101,15 @@
                 (pid &key event)))
   "A child owned and reaped by CCLSH.
 
-STATE is :RUNNING, :STOPPED, :EXITED or :SIGNALED.  CODE is NIL while
+STATE is :RUNNING, :STOPPED, :EXITED or :SIGNALED. CODE is NIL while
 running, the stop signal while stopped, and the raw exit status or
-terminating signal after death.  EVENT is signaled after each state
-transition.  MONITOR and LOCK are private lifecycle machinery."
+terminating signal after death. GENERATION increases for every published
+transition. EVENT is signaled after each transition. MONITOR and LOCK are
+private lifecycle machinery."
   (pid 0 :type integer :read-only t)
   (state ':running)
   (code nil)
+  (generation 0)
   (event nil)
   (monitor nil)
   (lock (ccl:make-lock "cclsh child state") :read-only t))
@@ -485,6 +487,7 @@ a fast first-stage leader unreaped while later stages join its group."
     (ccl:with-lock-grabbed ((shell-process-lock process))
       (setf (shell-process-state process) state)
       (setf (shell-process-code process) code)
+      (incf (shell-process-generation process))
       (setf event (shell-process-event process)))
     (when event
       (ccl:signal-semaphore event)))
@@ -497,6 +500,7 @@ a fast first-stage leader unreaped while later stages join its group."
       (unless (member (shell-process-state process) '(:exited :signaled))
         (setf (shell-process-state process) ':exited)
         (setf (shell-process-code process) 127)
+        (incf (shell-process-generation process))
         (setf event (shell-process-event process))))
     (when event
       (ccl:signal-semaphore event)))
@@ -576,13 +580,14 @@ The event is signaled after stop, continue, exit and signal transitions."
   process)
 
 (defun shell-process-snapshot (process)
-  "Return an atomic snapshot of PROCESS's state and raw code."
+  "Return PROCESS's state, raw code and transition generation atomically."
   (ccl:with-lock-grabbed ((shell-process-lock process))
     (values (shell-process-state process)
-            (shell-process-code process))))
+            (shell-process-code process)
+            (shell-process-generation process))))
 
 (defun shell-process-status (process)
-  "Return PROCESS's state and raw exit, signal or stop code."
+  "Return PROCESS's state, raw code and transition generation."
   (shell-process-snapshot process))
 
 (defun shell-process-live-state (process)

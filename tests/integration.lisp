@@ -253,6 +253,19 @@ while :; do
 done
 ")
   (integration-write-program
+   "run-one-line"
+   "#!/bin/sh
+printf '__RUN_READER_READY__\\n' >&2
+IFS= read -r line || exit 7
+printf '__RUN_READER_VALUE__%s\\n' \"$line\"
+")
+  (integration-write-program
+   "run-line-counter"
+   "#!/bin/sh
+count=$(wc -l)
+printf '__RUN_READER_COUNT__%s\\n' \"$count\"
+")
+  (integration-write-program
    "modecheck"
    "#!/bin/sh
 if stty -a | tr ';' '\\n' | grep -Eq '(^|[[:space:]])-echo([[:space:]]|$)'; then
@@ -1071,35 +1084,54 @@ exit 0
                           "~a still sleeps while polling process state" path))))
 
 (defun integration-check-process-groups ()
-  "Require both external pipeline stages to share one process group."
-  (let* ((form
-           "(multiple-value-bind (text status)
-                (capture (pgid-left) (pgid-right))
-              (format t \"__PGID_CAPTURE__~a__PGID_STATUS__~d~%\"
-                      text status))")
-         (result (integration-run form))
-         (output (direct-result-output result))
-         (clean  (integration-clean-text output))
-         (start  (search "__PGIDS__" clean)))
-    (integration-require-success result "same-PGID pipeline")
-    (integration-ensure start "pipeline did not print PGIDs: ~a" clean)
-    (let* ((left-start (+ start (length "__PGIDS__")))
-           (colon (position #\: clean :start left-start))
-           (end (and colon
-                     (position-if-not #'digit-char-p clean
-                                      :start (1+ colon)))))
-      (integration-ensure colon "malformed PGID output: ~a" clean)
-      (let ((left  (parse-integer clean :start left-start :end colon
-                                  :junk-allowed t))
-            (right (parse-integer clean :start (1+ colon)
-                                  :end (or end (length clean))
-                                  :junk-allowed t)))
-        (integration-ensure (and left right (= left right))
-                            "pipeline stages used PGIDs ~s and ~s"
-                            left right)))
-    (integration-ensure
-     (zerop (or (integration-integer-after "__PGID_STATUS__" output) -1))
-     "same-PGID pipeline returned a nonzero status")))
+  "Require direct and dynamically launched stages to share one group."
+  (labels ((check (form context)
+             (let* ((result (integration-run form))
+                    (output (direct-result-output result))
+                    (clean  (integration-clean-text output))
+                    (start  (search "__PGIDS__" clean)))
+               (integration-require-success result context)
+               (integration-ensure
+                start "~a did not print PGIDs: ~a" context clean)
+               (let* ((left-start (+ start (length "__PGIDS__")))
+                      (colon (position #\: clean :start left-start))
+                      (end (and colon
+                                (position-if-not
+                                 #'digit-char-p clean
+                                 :start (1+ colon)))))
+                 (integration-ensure
+                  colon "malformed ~a PGID output: ~a" context clean)
+                 (let ((left
+                         (parse-integer clean :start left-start :end colon
+                                       :junk-allowed t))
+                       (right
+                         (parse-integer clean :start (1+ colon)
+                                       :end (or end (length clean))
+                                       :junk-allowed t)))
+                   (integration-ensure
+                    (and left right (= left right))
+                    "~a stages used PGIDs ~s and ~s"
+                    context left right)))
+               (integration-ensure
+                (zerop (or (integration-integer-after
+                            "__PGID_STATUS__" output)
+                           -1))
+                "~a returned a nonzero status" context))))
+    (check
+     "(multiple-value-bind (text status)
+          (capture (pgid-left) (pgid-right))
+        (format t \"__PGID_CAPTURE__~a__PGID_STATUS__~d~%\"
+                text status))"
+     "direct pipeline")
+    (check
+     "(progn
+        (defcommand integration-run-pgid-left ()
+          (run \"pgid-left\"))
+        (multiple-value-bind (text status)
+            (capture (integration-run-pgid-left) (pgid-right))
+          (format t \"__PGID_CAPTURE__~a__PGID_STATUS__~d~%\"
+                  text status)))"
+     "pipeline-aware run")))
 
 (defun integration-check-fast-leaders ()
   "Stress pipelines whose process-group leader exits immediately."
@@ -1123,6 +1155,8 @@ exit 0
   (let ((result
           (integration-run
            "(progn
+              (defcommand integration-run-yes ()
+                (run \"yes\"))
               (loop repeat 40
                     do (multiple-value-bind (text status)
                            (capture (yes) (head \"-n\" \"1\"))
@@ -1130,6 +1164,15 @@ exit 0
                                       (zerop status))
                            (error \"yes/head produced ~s with status ~d\"
                                   text status))))
+              (loop repeat 40
+                    do (multiple-value-bind (text status)
+                           (capture (integration-run-yes)
+                                    (head \"-n\" \"1\"))
+                         (unless (and (string= text \"y\")
+                                      (zerop status))
+                           (error
+                            \"nested yes/head produced ~s with status ~d\"
+                            text status))))
               (format t \"__SIGPIPE_OK__~%\"))"
            :timeout 20)))
     (integration-require-success result "yes/head SIGPIPE stress")
@@ -2137,6 +2180,93 @@ exit 0
              (integration-tail jobs))))
       (integration-session-stop session))))
 
+(defun integration-check-run-job-control ()
+  "Exercise Ctrl-Z, fg and Ctrl-C through a builtin which calls RUN."
+  (let ((session nil))
+    (unwind-protect
+        (progn
+          (setf session (integration-session-start))
+          (integration-session-command
+           session
+           "(defcommand integration-run-longproducer ()
+              (run \"longproducer\"))")
+          (let ((start (integration-session-position session)))
+            (integration-session-send-line
+             session
+             "(pipe (integration-run-longproducer) (cat))")
+            (integration-session-wait session "__LONG_STARTED__"
+                                      :start start :timeout 5)
+            (let ((stopped
+                    (integration-session-interrupt
+                     session (code-char 26) start :timeout 8)))
+              (integration-ensure
+               (integration-contains-p
+                "Stopped" (integration-clean-text stopped))
+               "Ctrl-Z did not stop pipeline-aware run: ~a"
+               (integration-tail stopped))))
+          (integration-ensure
+           (= 148 (integration-session-last-status session))
+           "pipeline-aware run stop status was not 148")
+          (let ((jobs (integration-session-command session "jobs")))
+            (integration-ensure
+             (integration-contains-p "Stopped" (integration-clean-text jobs))
+             "jobs lost stopped pipeline-aware run: ~a"
+             (integration-tail jobs)))
+          (let ((start (integration-session-position session)))
+            (integration-session-send-line session "fg")
+            (integration-session-wait session "__LONG_TICK__"
+                                      :start start :timeout 5)
+            (integration-session-interrupt
+             session (code-char 3) start :timeout 5))
+          (integration-ensure
+           (= 130 (integration-session-last-status session))
+           "interrupted pipeline-aware run status was not 130")
+          (let ((jobs (integration-session-command session "jobs")))
+            (integration-ensure
+             (not (or (integration-contains-p
+                       "Stopped" (integration-clean-text jobs))
+                      (integration-contains-p
+                       "Running" (integration-clean-text jobs))))
+             "completed pipeline-aware run remained in jobs: ~a"
+             (integration-tail jobs))))
+      (integration-session-stop session))))
+
+(defun integration-check-run-tty-input ()
+  "Require nested RUN to inherit a first builtin stage's terminal input."
+  (let ((session nil)
+        (input "dynamic run input: Příliš žluťoučký 🐈"))
+    (unwind-protect
+        (progn
+          (setf session (integration-session-start))
+          (integration-session-command
+           session
+           "(defcommand integration-run-reader ()
+              (run \"run-one-line\"))")
+          (let ((start (integration-session-position session)))
+            (integration-session-send-line
+             session
+             "(pipe (integration-run-reader) (run-line-counter))")
+            (integration-session-wait
+             session "__RUN_READER_READY__" :start start :timeout 5)
+            (integration-session-send-line session input)
+            (let* ((end (integration-session-await-prompt
+                         session start :timeout 5))
+                   (output (subseq (integration-session-text session)
+                                   start end))
+                   (clean (integration-clean-text output)))
+              (integration-ensure
+               (integration-contains-p "__RUN_READER_COUNT__1" clean)
+               "nested run input did not cross the pipeline: ~a"
+               (integration-tail output))
+              (integration-ensure
+               (not (integration-contains-p "__RUN_READER_VALUE__" clean))
+               "nested run output bypassed the pipeline: ~a"
+               (integration-tail output))))
+          (integration-ensure
+           (zerop (integration-session-last-status session))
+           "pipeline-aware run input returned nonzero"))
+      (integration-session-stop session))))
+
 (defun integration-check-builtin-tty-input ()
   "Require a first-stage builtin to read the inherited terminal safely."
   (let ((session nil)
@@ -2248,8 +2378,12 @@ exit 0
                         #'integration-check-unicode-line-editing)
       (integration-test "PTY in-process builtin job control"
                         #'integration-check-builtin-job-control)
+      (integration-test "PTY pipeline-aware run job control"
+                        #'integration-check-run-job-control)
       (integration-test "PTY builtin terminal-input proxy"
-                        #'integration-check-builtin-tty-input))
+                        #'integration-check-builtin-tty-input)
+      (integration-test "PTY pipeline-aware run terminal input"
+                        #'integration-check-run-tty-input))
   (ignore-errors
     (uiop:delete-directory-tree *integration-directory*
                                 :validate t

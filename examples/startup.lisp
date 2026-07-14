@@ -48,6 +48,8 @@
 (startup--set-default "EDITOR" "vi")
 (startup--set-default "VISUAL" (getenv "EDITOR"))
 
+;; RUN dynamically inherits pipeline I/O and job control when these wrappers
+;; execute as PIPE or CAPTURE stages.
 (defcommand la (&rest arguments)
   "List all files in long form."
   (apply #'run "ls" "-la" arguments))

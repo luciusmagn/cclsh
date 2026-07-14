@@ -164,6 +164,14 @@ PRINC-TO-STRING, preserving the former scalar argument behavior."
   (aborted nil)
   abort-signal)
 
+(defstruct pipeline-run-context
+  "Dynamic external execution context for one builtin pipeline stage."
+  group
+  input-fd
+  output-fd
+  error-fd
+  input-demand)
+
 (defvar *pipeline-task-starter* #'ccl:process-run-function
   "Function used to start Lisp pipeline workers. Tests may bind it to
    inject a partial thread-start failure.")
@@ -653,6 +661,85 @@ PRINC-TO-STRING, preserving the former scalar argument behavior."
         (fd-close duplicate)
         (error condition)))))
 
+(defun pipeline--run-context-spawn
+    (context path arguments event process-cell)
+  "Spawn PATH into CONTEXT's running pipeline group.
+
+The group lock makes a late spawn atomic with pipeline suspension and abort.
+CCL interrupts stay disabled until PROCESS-CELL owns the child and its monitor
+has started, so an asynchronous task abort cannot leave an unowned child."
+  (let ((group (pipeline-run-context-group context)))
+    (loop until (first process-cell)
+          do (ccl:without-interrupts
+               (ccl:with-lock-grabbed
+                   ((pipeline-task-group-lock group))
+                 (cond ((pipeline-task-group-aborted group)
+                        (error "pipeline task was aborted"))
+                       ((not (pipeline-task-group-suspended group))
+                        (let ((process-group
+                                (pipeline-task-group-process-group group)))
+                          (unless (and (integerp process-group)
+                                       (plusp process-group))
+                            (error "pipeline process group is unavailable"))
+                          (setf (first process-cell)
+                                (shell-process-spawn
+                                 path arguments
+                                 :process-group process-group
+                                 :fd0 (pipeline-run-context-input-fd context)
+                                 :fd1 (pipeline-run-context-output-fd context)
+                                 :fd2 (pipeline-run-context-error-fd context)
+                                 :event event))
+                          (shell-process-start-monitor
+                           (first process-cell) event))))))
+             (unless (first process-cell)
+               (ccl:process-allow-schedule)))
+    (first process-cell)))
+
+(defun pipeline--run-context-wait (context process event)
+  "Wait for PROCESS and return its shell status inside CONTEXT's job."
+  (let ((group (pipeline-run-context-group context))
+        (propagated-stop-generation nil))
+    (loop
+      (multiple-value-bind (state code generation)
+          (shell-process-status process)
+        (case state
+          (:exited
+           (return (or code 0)))
+          (:signaled
+           (return (+ 128 (or code 0))))
+          (:stopped
+           ;; A child can stop itself without stopping the sentinel. Publish
+           ;; each distinct stop to the outer group exactly once. GENERATION
+           ;; distinguishes a stale stop snapshot after fg from a new stop
+           ;; which followed a very short continued state.
+           (unless (eql generation propagated-stop-generation)
+             (setf propagated-stop-generation generation)
+             (job--signal-group (pipeline-task-group-job group)
+                                +process-sigtstp+
+                                :missing-ok t))))
+      (ccl:wait-on-semaphore event)))))
+
+(defun pipeline--run-external (context path arguments)
+  "Run external PATH with ARGUMENTS inside pipeline CONTEXT."
+  (let ((process-cell (list nil))
+        (event (ccl:make-semaphore)))
+    (unwind-protect
+        (progn
+          ;; Preserve ordering between buffered Lisp output and a child which
+          ;; writes directly to the same underlying descriptors.
+          (force-output *standard-output*)
+          (unless (eq *error-output* *standard-output*)
+            (force-output *error-output*))
+          (let ((demand (pipeline-run-context-input-demand context)))
+            (when demand
+              (pipeline--demand-input-start demand)))
+          (pipeline--run-context-spawn
+           context path arguments event process-cell)
+          (pipeline--run-context-wait
+           context (first process-cell) event))
+      (when (first process-cell)
+        (shell-process-kill-reap (first process-cell))))))
+
 (defun pipeline--builtin-task (stage group &key standard-input
                                             standard-output
                                             error-output
@@ -661,7 +748,8 @@ PRINC-TO-STRING, preserving the former scalar argument behavior."
                                             argv)
   "Create STAGE's gated builtin task and all of its UTF-8 streams."
   (let ((owners nil)
-        (complete nil))
+        (complete nil)
+        (input-demand nil))
     (unwind-protect
         (multiple-value-bind (input input-owner)
             (if (= (pipeline-stage-input-fd stage) 0)
@@ -678,7 +766,8 @@ PRINC-TO-STRING, preserving the former scalar argument behavior."
               (setf input
                     (make-instance 'pipeline-demand-input-stream
                                    :input input
-                                   :demand-output demand-output))))
+                                   :demand-output demand-output)
+                    input-demand input)))
           (multiple-value-bind (output output-owner)
               (if (= (pipeline-stage-output-fd stage) 1)
                   (values standard-output nil)
@@ -697,7 +786,24 @@ PRINC-TO-STRING, preserving the former scalar argument behavior."
                         (pipeline-stage-error-fd stage) ':output)))
               (when error-owner
                 (push error-owner owners))
-              (let* ((presentation-disabled
+              (let* ((input-fd
+                       (if input-owner (second input-owner) 0))
+                     (output-fd
+                       (if output-owner (second output-owner) 1))
+                     (error-fd
+                       (cond ((= (pipeline-stage-error-fd stage)
+                                 (pipeline-stage-output-fd stage))
+                              output-fd)
+                             (error-owner (second error-owner))
+                             (t 2)))
+                     (run-context
+                       (make-pipeline-run-context
+                        :group group
+                        :input-fd input-fd
+                        :output-fd output-fd
+                        :error-fd error-fd
+                        :input-demand input-demand))
+                     (presentation-disabled
                        (or (/= (pipeline-stage-output-fd stage) 1)
                            (/= (pipeline-stage-error-fd stage) 2)))
                      (task
@@ -716,6 +822,10 @@ PRINC-TO-STRING, preserving the former scalar argument behavior."
                                 (*error-output* error-stream)
                                 (*package* package)
                                 (*argv* argv)
+                                (*run-external-executor*
+                                  (lambda (path arguments)
+                                    (pipeline--run-external
+                                     run-context path arguments)))
                                 (*presentation-enabled*
                                   (and presentation-enabled
                                        (not presentation-disabled))))
@@ -809,7 +919,13 @@ PRINC-TO-STRING, preserving the former scalar argument behavior."
       (unless (or (pipeline-task-group-suspended group)
                   (pipeline-task-group-aborted group))
         (setf (pipeline-task-group-suspended group) t
-              suspend t)))
+              suspend t)
+        ;; Repeat the group stop while holding the late-spawn lock. A child
+        ;; created after the terminal's original Ctrl-Z cannot miss the stop.
+        (let ((process-group
+                (pipeline-task-group-process-group group)))
+          (when (and (integerp process-group) (plusp process-group))
+            (process-group-kill process-group +process-sigtstp+)))))
     (when suspend
       (dolist (task (pipeline-task-group-tasks group))
         (when (and (not (pipeline--task-done-p task))
@@ -856,7 +972,15 @@ PRINC-TO-STRING, preserving the former scalar argument behavior."
               (or signal +process-sigkill+)
               resume (pipeline-task-group-suspended group)
               (pipeline-task-group-suspended group) nil
-              abort t)))
+              abort t)
+        ;; Serialize a second signal with late child creation. Either the
+        ;; child joins before this signal or sees ABORTED and never spawns.
+        (let ((process-group
+                (pipeline-task-group-process-group group)))
+          (when (and (integerp process-group) (plusp process-group))
+            (process-group-kill
+             process-group
+             (pipeline-task-group-abort-signal group))))))
     (when abort
       (dolist (task (pipeline-task-group-tasks group))
         (when (and (not (pipeline--task-done-p task))

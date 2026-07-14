@@ -337,6 +337,26 @@ one program in the foreground and returns its exit status; arguments
 are stringified with =princ-to-string=, so numbers and pathnames are
 fine.
 
+Normally, =run= creates its own foreground job. When called synchronously by a
+=defcommand= which is executing as a =pipe= or =capture= builtin stage, it
+dynamically inherits that stage's standard input, output and error and joins
+the surrounding pipeline process group:
+
+#+begin_src lisp
+(defcommand ls (&rest arguments)
+  "List files with exa."
+  (apply #'run "exa" arguments))
+
+(pipe (ls "-1" (glob "screenshot-*"))
+      (wc "-l"))
+#+end_src
+
+The wrapper remains one logical builtin stage, waits for its child and returns
+the child's status. Its child participates in the pipeline's redirection and
+job control, including Ctrl-C, Ctrl-Z and =fg=. This inheritance applies to a
+synchronous =run= on the command worker's dynamic stack. Direct
+=ccl:run-program= calls and separately created Lisp threads bypass it.
+
 Builtins that ship with the shell: =cd= (supports =-=, updates =PWD=
 and =OLDPWD=), =exit=, =export=, =unset=, =rehash= (drop cached =PATH=
 lookups and completions), =commands= (list all defined commands),
@@ -452,7 +472,10 @@ and =merge-error= are mutually exclusive.
 
 Each returns the deciding exit status and records it in
 =*last-status*=. Builtin commands can appear inside =pipe= as well;
-they run concurrently and stream output to the next stage.
+they run concurrently and stream output to the next stage. A synchronous
+=run= inside such a builtin dynamically inherits its prepared descriptors and
+the surrounding pipeline job, so external-program wrappers stream and receive
+signals like direct external stages.
 
 * Unicode and bytes
 
