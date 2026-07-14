@@ -223,28 +223,6 @@ while :; do
 done
 ")
   (integration-write-program
-   "observed-cat"
-   "#!/bin/sh
-group=$(ps -o pgid= -p $$ | tr -d ' ')
-exec 3<&0
-cat <&3 &
-child=$!
-foreground=0
-while kill -0 \"$child\" 2>/dev/null; do
-    terminal=$(ps -o tpgid= -p $$ | tr -d ' ')
-    if test \"$terminal\" = \"$group\"; then
-        if test \"$foreground\" -eq 0; then
-            printf '__OBSERVED_CAT_FOREGROUND__\\n' >&2
-            foreground=1
-        fi
-    else
-        foreground=0
-    fi
-    sleep 0.05
-done
-wait \"$child\"
-")
-  (integration-write-program
    "modecheck"
    "#!/bin/sh
 if stty -a | tr ';' '\\n' | grep -Eq '(^|[[:space:]])-echo([[:space:]]|$)'; then
@@ -261,12 +239,20 @@ stty -echo
   (integration-write-program
    "stop-noecho"
    "#!/bin/sh
+trap 'exit 130' INT
 stty -echo
 printf '__NOECHO_SET__\\n'
 kill -STOP $$
+if stty -a | grep -Eq '(^|[[:space:];])-echo([[:space:];]|$)'; then
+    printf '__RESUMED_NOECHO__\\n'
+else
+    printf '__RESUMED_ECHO__\\n'
+fi
 stty echo
 printf '__MODE_RESUMED__\\n'
-sleep 30
+IFS= read -r _
+printf '__INTERRUPT_READY__\\n'
+IFS= read -r _
 ")
   (integration-write-program
    "record-sleeper"
@@ -1743,7 +1729,15 @@ exit 0
              (integration-tail restored)))
           (let ((start (integration-session-position session)))
             (integration-session-send-line session "fg")
+            (integration-session-wait session "__RESUMED_NOECHO__"
+                                      :start start :timeout 5)
             (integration-session-wait session "__MODE_RESUMED__"
+                                      :start start :timeout 5)
+            ;; Complete one foreground read before interrupting the next one.
+            ;; This makes the marker a handshake with the resumed process,
+            ;; rather than output emitted just before it begins to wait.
+            (integration-session-send-line session "interrupt-ready")
+            (integration-session-wait session "__INTERRUPT_READY__"
                                       :start start :timeout 5)
             (integration-session-interrupt session (code-char 3) start))
           (let ((restored (integration-session-command session "modecheck")))
@@ -1763,23 +1757,39 @@ exit 0
            session
            "(progn
               (defparameter *integration-builtin-count* 0)
+              (defparameter *integration-builtin-foreground-count* 0)
               (defcommand integration-ticker ()
-                (loop
-                  (incf *integration-builtin-count*)
-                  (format t \"__BUILTIN_STREAM__~d~%\"
-                          *integration-builtin-count*)
-                  (force-output)
-                  (sleep 0.1))))")
+                (let ((foreground nil))
+                  (loop
+                    (multiple-value-bind (terminal-group error-code)
+                        (cclsh::terminal-current-foreground)
+                      (declare (ignore error-code))
+                      (let ((foreground-now
+                              (and terminal-group
+                                   (/= terminal-group
+                                       (cclsh::terminal-own-process-group)))))
+                        (when (and foreground-now (not foreground))
+                          (incf *integration-builtin-foreground-count*)
+                          (format t \"__BUILTIN_FOREGROUND__~d~%\"
+                                  *integration-builtin-foreground-count*))
+                        (setf foreground foreground-now)))
+                    (incf *integration-builtin-count*)
+                    (format t \"__BUILTIN_STREAM__~d~%\"
+                            *integration-builtin-count*)
+                    (force-output)
+                    (sleep 0.1)))))")
 
-          ;; OBSERVED-CAT is an external last stage. Its marker is only
-          ;; emitted after the pipeline group owns the terminal.
+          ;; The builtin gate opens only after the external group owns the
+          ;; terminal. A /dev/null input avoids involving the lazy terminal
+          ;; proxy, while CAT remains a directly tracked external last stage.
           (let ((start (integration-session-position session)))
             (integration-session-send-line
-             session "(pipe (integration-ticker) (observed-cat))")
+             session
+             "(pipe (from \"/dev/null\") (integration-ticker) (cat))")
             (integration-session-wait
-             session "__OBSERVED_CAT_FOREGROUND__" :start start :timeout 5)
+             session "__BUILTIN_FOREGROUND__1" :start start :timeout 5)
             (integration-session-wait
-             session "__BUILTIN_STREAM__" :start start :timeout 5)
+             session "__BUILTIN_STREAM__1" :start start :timeout 5)
             (let ((stopped
                     (integration-session-interrupt session (code-char 26)
                                                    start :timeout 5)))
@@ -1829,12 +1839,12 @@ exit 0
                  "jobs did not report the resumed builtin pipeline: ~a"
                  (integration-tail jobs)))))
 
-          ;; OBSERVED-CAT resets its foreground marker while under BG, so
-          ;; this new marker proves FG completed terminal handoff.
+          ;; The worker observes the shell group while under BG, then emits a
+          ;; new marker only after FG has completed terminal handoff.
           (let ((start (integration-session-position session)))
             (integration-session-send-line session "fg")
             (integration-session-wait
-             session "__OBSERVED_CAT_FOREGROUND__"
+             session "__BUILTIN_FOREGROUND__2"
              :start start :timeout 5)
             (integration-session-interrupt session (code-char 3) start
                                            :timeout 3))
@@ -1870,7 +1880,7 @@ exit 0
           (integration-session-command
            session
            "(defcommand integration-tty-reader ()
-              (format t \"__TTY_READER_READY__~%\")
+              (format t \"__TTY_READER_READY__~d~%\" 1)
               (force-output)
               (handler-case
                   (let ((line (read-line *standard-input* nil nil)))
@@ -1885,10 +1895,10 @@ exit 0
                   1)))")
           (let ((start (integration-session-position session)))
             (integration-session-send-line
-             session "(pipe (integration-tty-reader) (observed-cat))")
+             session "(pipe (integration-tty-reader) (cat))")
             (let ((runtime-start
                     (integration-session-wait
-                     session "__OBSERVED_CAT_FOREGROUND__"
+                     session "__TTY_READER_READY__1"
                      :start start :timeout 5)))
               (integration-session-send-line session input)
               (let* ((end (integration-session-await-prompt
