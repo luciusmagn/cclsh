@@ -327,7 +327,7 @@ existing path is entered directly and other arguments query zoxide. zi runs
 zoxide's interactive query. Running setup after zoxide disappears removes
 its stale hook and command bindings.")
 
-    ("install" "a reproducible user installation"
+    ("install" "user and shared system installations"
      "The recommended Linux x86-64 package is the Nix flake:
 
   nix run github:luciusmagn/cclsh -- --version
@@ -356,8 +356,17 @@ downstream CCL revision:
 The fork is based on https://github.com/Clozure/ccl. Local files under
 patches/ are byte-stable attestation mirrors. Nix fetches immutable diffs for
 the exact fork commits. Select the rebuilt lx86cl64 and its matching boot image
-for make build. README.org has the complete source and login installation
-sequences.")
+for make build. After an attested build, install one system shell for every
+account with:
+
+  sudo make install-system-shell
+
+The installer registers /usr/local/bin/cclsh in /etc/shells but never changes
+an account. Each account then runs:
+
+  chsh -s /usr/local/bin/cclsh
+
+README.org has the complete source and system installation sequence.")
 
     ("scripting" "one-shots, scripts and shebangs"
      "Three non-interactive modes, all skipping startup.lisp and
@@ -397,43 +406,41 @@ absolute path or a system-visible wrapper. The string uses cclsh syntax,
 not sh.")
 
     ("login" "using cclsh as a login shell"
-     "Install and register a root-owned copy outside the repository:
+     "Install and register one root-owned shared copy outside the repository:
 
   scripts/check
-  make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \\
+  make system-shell-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \\
     CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
   make integration-check CCL=../ccl/lx86cl64 \\
     CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
-  sudo make install-login-shell LOGIN_USER=USER
+  sudo make install-system-shell
 
-Before the configured probe and chsh, copy examples/startup.lisp to
-~/.config/cclsh/startup.lisp and make the directory mode 0700 and the file
-mode 0600. Then verify:
+This installs one user-neutral image at /usr/local/bin/cclsh and registers it
+in /etc/shells. It never changes an account. Set PROBE_USER=USER to add a
+clean-home launch as that account; the probe does not bind the installation to
+that user. Reinstalling an attested release updates every account using the
+stable path.
 
-  sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \\
-    SHELL=/usr/local/bin/cclsh \\
-    /usr/local/bin/cclsh --version
-  sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \\
-    SHELL=/usr/local/bin/cclsh CCLSH_SAFE=1 \\
-    /usr/local/bin/cclsh -c 'exit 0'
-  sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \\
-    SHELL=/usr/local/bin/cclsh \\
-    /usr/local/bin/cclsh -lc 'echo $PATH'
-  sudo chsh -s /usr/local/bin/cclsh USER
-  getent passwd USER
+Each account keeps its own startup.lisp, history and writable Quicklisp state
+under its home or XDG directories. Copy examples/startup.lisp to
+~/.config/cclsh/startup.lisp, keep the directory mode 0700 and the file mode
+0600, then verify and switch that account:
+
+  /usr/local/bin/cclsh --version
+  env CCLSH_SAFE=1 /usr/local/bin/cclsh -c 'exit 0'
+  /usr/local/bin/cclsh -lc 'echo $PATH'
+  chsh -s /usr/local/bin/cclsh
 
 Plain -c skips all user state for remote safety. -lc, -cl, -ic and
 -l -c load startup.lisp before running their command, so $SHELL -lc
 sees the configured login environment. Other flags are ignored so odd
-login invocations cannot lock you out. login-build attests the required CCL
-patches and exact kernel/image hashes. install-login-shell rejects an absent
-or stale attestation, probes the candidate as USER before activation, then
+login invocations cannot lock you out. system-shell-build attests the required
+CCL patches and exact kernel/image hashes. install-system-shell rejects an
+absent or stale attestation, validates the candidate before activation, then
 registers its stable path in /etc/shells. Registration failure restores the
-previous release. It never changes an account. USER must have a private
-primary group, and one stable path can serve only one login account. Use a
-different BINDIR for another account. Root is supported at a dedicated path:
+previous release. An administrator can change another account with:
 
-  sudo make install-login-shell LOGIN_USER=root BINDIR=/usr/local/sbin
+  sudo chsh -s /usr/local/bin/cclsh USER
 
 Probe optional startup tools such as zoxide separately after the guaranteed
 version, safe command and configured PATH checks pass.
@@ -443,7 +450,11 @@ in PATH.
 
 The conservative choice is to keep root or another privileged recovery
 account on a stock shell. If root uses cclsh, keep an existing privileged
-session open while testing and verify boot-loader or live-system recovery.
+session open while testing, verify boot-loader or live-system recovery, and use
+the same shared path:
+
+  sudo chsh -s /usr/local/bin/cclsh root
+
 Emergency access past broken user state:
 
   env CCLSH_SAFE=1 /usr/local/bin/cclsh

@@ -94,8 +94,8 @@ make install BINDIR="$HOME/.local/bin"
 The distribution-specific =CCL_IMAGE= must match the source generation. At the
 selected fork revision, =ccl-kernel= verifies that the local patch mirrors are
 already represented and builds the kernel. Those =patches/= files remain
-byte-stable because login-build attestation hashes their exact contents. Nix
-fetches immutable diffs for the exact fork commits rather than following a
+byte-stable because system-shell-build attestation hashes their exact contents.
+Nix fetches immutable diffs for the exact fork commits rather than following a
 branch. [[file:../patches/README.org][The patch ledger]] records both lines of
 history, hashes, validation and upstream disposition.
 
@@ -114,33 +114,46 @@ CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
 #+end_src
 
 =scripts/install= creates an owner-only copy in =~/.local/bin=. A root
-=make install= without =DESTDIR= is refused. For a login installation, run the
-checks in this order so the attestation is not removed by a later plain build:
+=make install= without =DESTDIR= is refused. To install one shared login shell,
+run the checks in this order so the attestation is not removed by a later plain
+build:
 
 #+begin_src sh
 scripts/check
-CCLSH_QUICKLISP_SETUP=/home/USER/quicklisp/setup.lisp \
-  make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
-    CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+make system-shell-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
+  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
 make integration-check CCL=../ccl/lx86cl64 \
   CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
-sudo make install-login-shell LOGIN_USER=USER
+sudo make install-system-shell
 #+end_src
 
-=login-build= holds both the cclsh and CCL checkout locks while verifying the
-downstream changes, rebuilding the kernel, publishing the image, and writing
-=cclsh.attestation=. The attestation binds both patch hashes to the exact
-kernel and image. =install-login-shell= rejects a missing or stale
-attestation, validates the candidate as =LOGIN_USER= before activation, then
-adds the stable root-owned path to =/etc/shells=. Registration failure restores
-the previous release. It never changes an account.
+=system-shell-build= holds both the cclsh and CCL checkout locks while
+verifying the downstream changes, rebuilding the kernel, publishing the image,
+and writing =cclsh.attestation=. The attestation binds both patch hashes to the
+exact kernel and image. =install-system-shell= rejects a missing or stale
+attestation, validates the shared candidate before activation, then adds its
+stable root-owned path to =/etc/shells=. Registration failure restores the
+previous release. It never changes an account.
 
-The login user must have a private primary group. One stable path serves one
-login account, so choose another =BINDIR= for another user. =PREFIX=,
-=BINDIR=, =SHELLS_FILE= and =LOGIN_USER= are Make variables. Custom system
-paths must be canonical and have root-owned parents that are not writable by
-non-root users. Manual images retain the Quicklisp tree used for their build;
-that tree must remain present and readable by the login account.
+The installed image is readable by every login account and contains no
+builder-specific Quicklisp state. Each process rebases startup, history,
+Quicklisp and ASDF state to the invoking account's home and XDG directories.
+One stable path therefore serves every account, and reinstalling an attested
+release updates all of them atomically. =PREFIX=, =BINDIR= and =SHELLS_FILE=
+select custom system paths. Those paths must be canonical and have root-owned
+parents that are not writable by non-root users.
+
+Set =PROBE_USER= to validate the candidate with an additional clean-home launch
+as an existing account:
+
+#+begin_src sh
+sudo make install-system-shell PROBE_USER=USER
+#+end_src
+
+This is only an extra probe. It does not bind the installation to that user.
+The deprecated =login-build= target aliases =system-shell-build=. The deprecated
+=install-login-shell LOGIN_USER=USER= target aliases =install-system-shell= and
+treats =USER= only as the optional probe.
 
 * How a line is interpreted
 
@@ -670,7 +683,7 @@ shell with the same care as always. What is in place:
 - Read loop errors are survived; the shell only gives up after 25
   consecutive failures rather than dying on the first hiccup.
 - Builds validate a staged kernel and image. Installs prepare a
-  content-addressed pair, validate a login candidate before activation, then
+  content-addressed pair, validate the shared candidate before activation, then
   atomically switch one stable symlink. The installed kernel verifies and
   preserves that stable invocation path in =SHELL=.
 
@@ -678,61 +691,56 @@ Recommendations, in order:
 
 1. Dogfood cclsh from an existing shell first.
 2. Run the source checks, build an attested pair, run the integration checks,
-   then install and register it:
+   then install and register one shared system shell:
 
    #+begin_src sh
    scripts/check
-   make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
+   make system-shell-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
      CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
    make integration-check CCL=../ccl/lx86cl64 \
      CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
-   sudo make install-login-shell LOGIN_USER=USER
+   sudo make install-system-shell
    #+end_src
 
-   This probes both =--version= and safe =-c= startup as =USER= before it
-   atomically points =/usr/local/bin/cclsh= at the candidate, then atomically
-   adds the stable path to =/etc/shells=. Failure restores the old target. It
-   refuses artifact or patch hashes that differ from =cclsh.attestation= and
-   does not run =chsh=. The account must have a private primary group, and the
-   stable path must not belong to a different login account.
-3. Copy and customize =examples/startup.lisp=. A login shell does not source
-   =/etc/profile= or fish configuration, so make sure =PATH= retains
-   =/usr/local/bin=, =/usr/bin= and =/bin=.
-4. Probe that real startup as the target account, then change only that one
-   account:
+   The installer checks =--version= and safe =-c= startup before it atomically
+   points =/usr/local/bin/cclsh= at the candidate and adds that stable path to
+   =/etc/shells=. Failure restores the old target. It refuses artifact or patch
+   hashes that differ from =cclsh.attestation= and does not run =chsh=. Add
+   =PROBE_USER=USER= when an additional clean-home probe as that account is
+   useful.
+3. Each account copies and customizes =examples/startup.lisp=. A login shell
+   does not source =/etc/profile= or fish configuration, so make sure =PATH=
+   retains =/usr/local/bin=, =/usr/bin= and =/bin=. Startup, history and writable
+   Quicklisp state remain private to that account even though the executable is
+   shared.
+4. Probe the real startup, then change that account with ordinary =chsh=:
 
    #+begin_src sh
-   sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
-     SHELL=/usr/local/bin/cclsh \
-     /usr/local/bin/cclsh --version
-   sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
-     SHELL=/usr/local/bin/cclsh CCLSH_SAFE=1 \
-     /usr/local/bin/cclsh -c 'exit 0'
-   sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
-     SHELL=/usr/local/bin/cclsh \
-     /usr/local/bin/cclsh -lc 'echo $PATH'
-   sudo chsh -s /usr/local/bin/cclsh USER
-   getent passwd USER
+   /usr/local/bin/cclsh --version
+   env CCLSH_SAFE=1 /usr/local/bin/cclsh -c 'exit 0'
+   /usr/local/bin/cclsh -lc 'echo $PATH'
+   chsh -s /usr/local/bin/cclsh
    #+end_src
 
    If startup enables zoxide or another optional tool, probe it separately
-   after these guaranteed checks pass.
+   after these guaranteed checks pass. An administrator can instead run
+   =sudo chsh -s /usr/local/bin/cclsh USER= for another account.
 
 5. The conservative choice is to keep =root= or another privileged recovery
    account on a stock shell. Root is supported when you deliberately accept
-   boot or live-system recovery as the fallback. Give it a separate stable
-   path, keep an existing privileged session open while testing, and only then
-   change the account:
+   boot or live-system recovery as the fallback. It uses the same shared path.
+   Keep an existing privileged session open while testing, and only then change
+   the account:
 
    #+begin_src sh
-   sudo make install-login-shell LOGIN_USER=root BINDIR=/usr/local/sbin
-   sudo chsh -s /usr/local/sbin/cclsh root
+   sudo chsh -s /usr/local/bin/cclsh root
    #+end_src
 
    Never point =/etc/passwd= at repository artifacts, which can disappear
    after a clean.
-6. Rebuild and reinstall after changing CCL itself, then repeat the clean
-   =--version= and =-c= probes before relying on the copied kernel.
+6. Rebuild and run =sudo make install-system-shell= after changing CCL or cclsh
+   itself. The atomic update reaches every account using the stable path. Repeat
+   the clean =--version= and =-c= probes before relying on the new release.
 
 If startup state misbehaves, bypass it directly:
 
