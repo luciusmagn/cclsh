@@ -172,12 +172,30 @@ then
         >&2
     exit 1
 fi
-release_id=$(
-    sha256sum cclsh.new cclsh.image.new |
-        cut -d ' ' -f 1 |
-        sha256sum |
-        cut -c 1-20
-)
+if ! kernel_hash=$(scripts/file-sha256 cclsh.new); then
+    exit 1
+fi
+if ! image_hash=$(scripts/file-sha256 cclsh.image.new); then
+    exit 1
+fi
+if ! release_hash=$(
+    printf '%s\n%s\n' "$kernel_hash" "$image_hash" | sha256sum
+); then
+    echo "cclsh build: could not hash release identity" >&2
+    exit 1
+fi
+release_hash=${release_hash%% *}
+if [ "${#release_hash}" -ne 64 ]; then
+    echo "cclsh build: invalid release identity digest" >&2
+    exit 1
+fi
+case "$release_hash" in
+    *[!0123456789abcdef]*)
+        echo "cclsh build: invalid release identity digest" >&2
+        exit 1
+        ;;
+esac
+release_id=$(printf '%.20s' "$release_hash")
 releases_directory=.cclsh-build-releases
 release_directory="$releases_directory/$release_id"
 install -d -m 700 "$releases_directory"
