@@ -230,10 +230,11 @@ CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
 - A lone word that names a bound variable, a keyword or a number
   evaluates REPL style when no command matches: =*last-status*= alone
   just prints its value.
-- =~=, =$VAR=, =${VAR}= and =*=/=?= globs expand in bare words. Quoting
-  with ="..."= (variables expand) and ='...'= (literal) is supported.
+- In command mode, =~=, =$VAR=, =${VAR}= and =*=/=?= globs expand in bare
+  words. Quoting with ="..."= (variables expand) and ='...'= (literal) is
+  supported.
 - Parens substitute Lisp values into commands: =echo (*balls*)= prints
-  the variable, =echo (+ 1 2)= prints 3, lists splice, NIL vanishes.
+  the variable, =echo (+ 1 2)= prints 3, proper lists splice, NIL vanishes.
 - Unfinished input continues on the next line: unbalanced Lisp forms,
   open strings, and trailing backslashes.
 - Undefined functions are reported with suggestions before argument
@@ -281,6 +282,7 @@ CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
 ;; Pipelines, sequencing, conditional chains, redirection
 (cmd git "status")                ; one command, mid-Lisp
 (pipe (ls "-la") (grep "lisp"))   ; ls -la | grep lisp
+(pipe (ls "-1" (glob "screenshot-*")) (wc "-l")) ; explicit glob splice
 (seq (make "clean") (make))       ; make clean ; make
 (all (make) (make "install"))     ; make && make install
 (any (probe) (fallback))          ; probe || fallback
@@ -303,6 +305,13 @@ CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
 ;; z project       ; query zoxide and cd to the result
 ;; zi              ; choose interactively through fzf
 #+end_src
+
+Stage arguments are Lisp expressions, so literal flags must be strings.
+Scalars make one argument, NIL vanishes, and proper lists splice one level.
+=(glob pattern...)= returns such a list using command-mode expansion rules;
+unmatched patterns remain literal, while ordinary strings never glob. =run=
+keeps ordinary function-call semantics, so use =apply= to spread a list into
+its arguments.
 
 =*last-status*= holds the exit status of the last command.
 

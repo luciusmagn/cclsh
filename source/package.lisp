@@ -47,6 +47,7 @@
            #:cmd
            #:pipe
            #:capture
+           #:glob
            #:seq
            #:all
            #:any

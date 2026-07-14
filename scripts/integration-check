@@ -12,7 +12,7 @@ if [ ! -s ./cclsh.image ]; then
     exit 2
 fi
 
-for program in script setsid timeout pkill ps tr grep stty seq yes head wc cat sleep
+for program in script setsid timeout pkill ps tr grep stty seq yes head wc cat sleep printf
 do
     if ! command -v "$program" >/dev/null 2>&1; then
         echo "cclsh integration: required program not found: $program" >&2

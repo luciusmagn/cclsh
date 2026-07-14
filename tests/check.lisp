@@ -50,6 +50,19 @@
                (uiop:run-program (list "stat" "-c" "%a" path)
                                  :output ':string)))
 
+(defvar *check-stage-arguments* nil
+  "Last argument vector received by CHECK-STAGE-ARGUMENTS.")
+
+(cclsh:defcommand check-stage-arguments (&rest arguments)
+  "Record ARGUMENTS for stage-expansion regression checks."
+  (setf *check-stage-arguments* (copy-list arguments))
+  23)
+
+(cclsh:defcommand check-stage-emit (&rest arguments)
+  "Print ARGUMENTS for pipeline stage-expansion regression checks."
+  (format t "~s~%" arguments)
+  41)
+
 
 ;;;; -- Clinedi boundary --
 
@@ -286,6 +299,148 @@
   (check-equal "unique directory completion remains open"
                "source/"
                (cclsh::line-editor--accept-completion "source/")))
+
+
+;;;; -- Lisp glob arguments --
+
+(let* ((root
+         (format nil "/tmp/cclsh-check-glob-~d/"
+                 (ccl:external-call "getpid" :int)))
+       (single-path      (concatenate 'string root "only.single"))
+       (alpha-path       (concatenate 'string root "alpha.multi"))
+       (space-path       (concatenate 'string root "beta space.multi"))
+       (single-pattern   (concatenate 'string root "*.single"))
+       (multiple-pattern (concatenate 'string root "*.multi"))
+       (missing-pattern  (concatenate 'string root "*.absent"))
+       (old-home         (cclsh:getenv "HOME"))
+       (variable         "CCLSH_CHECK_GLOB_ROOT")
+       (old-variable     (cclsh:getenv variable)))
+  (flet ((restore-environment (name value)
+           (if value
+               (cclsh:setenv name value)
+               (cclsh::unsetenv name))))
+    (unwind-protect
+        (progn
+          (check-write-utf8-file single-path "single")
+          (check-write-utf8-file alpha-path "alpha")
+          (check-write-utf8-file space-path "space")
+
+          (multiple-value-bind (symbol status)
+              (find-symbol "GLOB" '#:cclsh)
+            (check-equal "glob is exported" ':external status)
+            (check-equal "glob is callable"
+                         t
+                         (and symbol (fboundp symbol) t))
+            (check-equal "glob is visible in cclsh-user"
+                         symbol
+                         (find-symbol "GLOB" '#:cclsh-user)))
+
+          (check-equal "one-match glob returns a proper list"
+                       (list single-path)
+                       (cclsh:glob single-pattern))
+          (check-equal "multiple glob matches are sorted"
+                       (list alpha-path space-path)
+                       (cclsh:glob multiple-pattern))
+          (check-equal "multiple glob patterns retain their positions"
+                       (list single-path alpha-path space-path)
+                       (cclsh:glob single-pattern multiple-pattern))
+          (check-equal "unmatched glob remains literal"
+                       (list missing-pattern)
+                       (cclsh:glob missing-pattern))
+          (check-equal "glob without patterns returns NIL"
+                       nil
+                       (cclsh:glob))
+          (check-equal "glob rejects a non-string pattern"
+                       t
+                       (handler-case
+                           (progn (cclsh:glob 42) nil)
+                         (type-error () t)))
+
+          (cclsh:setenv "HOME" (string-right-trim "/" root))
+          (check-equal "glob expands a leading tilde"
+                       (list single-path)
+                       (cclsh:glob "~/*.single"))
+          (cclsh:setenv variable (string-right-trim "/" root))
+          (check-equal "glob expands an environment variable"
+                       (list single-path)
+                       (cclsh:glob
+                        (format nil "$~a/*.single" variable)))
+
+          (check-equal "cmd glob returns the command status"
+                       23
+                       (cclsh:cmd check-stage-arguments
+                                  "before"
+                                  (cclsh:glob multiple-pattern)
+                                  "after"))
+          (check-equal "cmd glob splices matches in place"
+                       (list "before" alpha-path space-path "after")
+                       *check-stage-arguments*)
+          (check-equal "cmd glob records the command status"
+                       23
+                       cclsh:*last-status*)
+
+          (let ((matches (cclsh:glob multiple-pattern)))
+            (cclsh:cmd check-stage-arguments matches)
+            (check-equal "stored glob list remains spliceable"
+                         (list alpha-path space-path)
+                         *check-stage-arguments*))
+          (cclsh:cmd check-stage-arguments '("left" 2))
+          (check-equal "proper list stage argument splices one level"
+                       (list "left" "2")
+                       *check-stage-arguments*)
+          (cclsh:cmd check-stage-arguments '((left right) "tail"))
+          (check-equal "nested stage list does not flatten recursively"
+                       (list "(LEFT RIGHT)" "tail")
+                       *check-stage-arguments*)
+          (cclsh:cmd check-stage-arguments nil "after")
+          (check-equal "NIL stage argument contributes no words"
+                       (list "after")
+                       *check-stage-arguments*)
+          (cclsh:cmd check-stage-arguments "*.multi")
+          (check-equal "ordinary string stage argument remains literal"
+                       (list "*.multi")
+                       *check-stage-arguments*)
+
+          (multiple-value-bind (text status)
+              (cclsh:capture
+                (check-stage-emit "before"
+                                  (cclsh:glob multiple-pattern)
+                                  "after"))
+            (check-equal "pipeline glob splices matches"
+                         (format nil "~s"
+                                 (list "before" alpha-path
+                                       space-path "after"))
+                         text)
+            (check-equal "pipeline glob keeps stage status" 41 status)))
+
+          (check-equal "single glob may supply a redirect path"
+                       41
+                       (cclsh:pipe
+                         (check-stage-emit "redirected")
+                         (to (cclsh:glob single-pattern))))
+          (check-equal "single glob redirect receives stage output"
+                       (format nil "~s~%" (list "redirected"))
+                       (uiop:read-file-string single-path))
+
+          (setf *check-stage-arguments* '(:not-started))
+          (check-equal "multi-match redirect fails arity validation"
+                       t
+                       (handler-case
+                           (progn
+                             (cclsh:pipe
+                               (check-stage-arguments "started")
+                               (to (cclsh:glob multiple-pattern)))
+                             nil)
+                         (cclsh::pipeline-syntax-error () t)))
+          (check-equal "invalid glob redirect starts no command"
+                       '(:not-started)
+                       *check-stage-arguments*)
+      (restore-environment "HOME" old-home)
+      (restore-environment variable old-variable)
+      (ignore-errors
+        (uiop:delete-directory-tree root
+                                    :validate t
+                                    :if-does-not-exist ':ignore)))))
 
 
 ;;;; -- Implicit directory commands --

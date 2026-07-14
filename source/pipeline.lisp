@@ -4,8 +4,9 @@
 ;;; style pipes, SEQ runs stages one after another, ALL and ANY are the
 ;;; && and || equivalents, and CAPTURE returns a pipeline's output as a
 ;;; string. A stage is written (name argument...) where NAME resolves
-;;; exactly like the first word of a command line and the arguments are
-;;; evaluated Lisp expressions.
+;;; exactly like the first word of a command line. Arguments are evaluated
+;;; Lisp expressions; proper lists splice into the argument vector, which
+;;; lets the public GLOB function supply any number of matching paths.
 ;;;
 ;;; Redirection is spelled as stages recognized by name inside PIPE and
 ;;; CAPTURE: (from "file") as the first stage feeds standard input,
@@ -26,16 +27,35 @@
   (:report (lambda (condition stream)
              (format stream "~a" (pipeline-syntax-error-message condition)))))
 
+(defun pipeline--argument-words (value)
+  "Convert one evaluated stage argument VALUE into command words.
+
+NIL contributes no words, a proper list contributes one word per element,
+and every other value contributes one word. Elements and scalar values use
+PRINC-TO-STRING, preserving the former scalar argument behavior."
+  (cond ((null value)
+         nil)
+        ((and (listp value)
+              (ignore-errors (list-length value)))
+         (mapcar #'princ-to-string value))
+        (t
+         (list (princ-to-string value)))))
+
 (defun pipeline--stage-form (stage)
   "Translate one (name argument...) STAGE into a runtime stage form."
   (destructuring-bind (head &rest arguments) stage
-    `(list ,(command-designator-name head)
-           ,@(mapcar (lambda (argument)
-                       `(princ-to-string ,argument))
-                     arguments))))
+    (let ((name (command-designator-name head)))
+      (if arguments
+          `(cons ,name
+                 (append
+                  ,@(mapcar (lambda (argument)
+                              `(pipeline--argument-words ,argument))
+                            arguments)))
+          `(list ,name)))))
 
 (defmacro pipe (&rest stages)
   "Run STAGES as a pipeline: (pipe (ls \"-la\") (grep \"lisp\")).
+   Proper-list arguments splice, so (glob \"*.lisp\") supplies every match.
    (from \"file\") first feeds standard input, (to \"file\") or
    (append-to \"file\") last redirects the output, and (error-to
    \"file\"), (error-append-to \"file\") or (merge-error) direct
@@ -45,15 +65,15 @@
 (defmacro capture (&rest stages)
   "Run STAGES as a pipeline and return its standard output as a string
    with trailing newlines removed, so (capture (git \"rev-parse\"
-   \"HEAD\")) is sh's $(git rev-parse HEAD). Returns (values string
-   status) and records *LAST-STATUS*."
+   \"HEAD\")) is sh's $(git rev-parse HEAD). Proper-list arguments splice.
+   Returns (values string status) and records *LAST-STATUS*."
   `(pipeline-capture (list ,@(mapcar #'pipeline--stage-form stages))))
 
 (defmacro cmd (name &rest arguments)
   "Run one command from the middle of Lisp code: (cmd git \"status\").
    NAME resolves like the first word of a command line and ARGUMENTS
-   are evaluated Lisp expressions, stringified like pipe stages.
-   Returns the exit status."
+   are evaluated Lisp expressions, stringified like pipe stages; proper
+   lists splice into the argument vector. Returns the exit status."
   `(stage-sequence-run (list ,(pipeline--stage-form (list* name arguments)))
                        ':always))
 

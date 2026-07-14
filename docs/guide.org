@@ -382,12 +382,15 @@ succeeds, an external program named =z= or =zi= can still resolve.
 * Pipelines and sequencing
 
 Process orchestration is spelled in Lisp. Stage heads resolve exactly
-like the first word of a command line, and stage arguments are
-evaluated Lisp expressions:
+like the first word of a command line, while stage arguments are evaluated
+Lisp expressions. A scalar becomes one stringified argument, NIL contributes
+no arguments, and a proper list splices one level:
 
 #+begin_src lisp
 (cmd git "status")                    ; one command, mid-Lisp
 (pipe (ls "-la") (grep "lisp"))       ; ls -la | grep lisp
+(pipe (ls "-1" (glob "screenshot-*")) ; explicit wildcard splice
+      (wc "-l"))
 (seq (make "clean") (make))           ; make clean ; make
 (all (make) (make "install"))         ; make && make install
 (any (probe) (echo "fallback"))       ; probe || echo fallback
@@ -396,11 +399,23 @@ evaluated Lisp expressions:
   (pipe (git "grep" pattern) (wc "-l")))
 #+end_src
 
+=glob= applies the same tilde, environment-variable, =*= and =?= expansion as
+a bare command word. It returns an ordinary proper list, so its result can be
+stored, combined or filtered before use as a stage argument. Matches are
+sorted within each pattern, pattern order is retained, and a pattern without
+matches remains literal. Ordinary strings never glob: ="-l"= is a flag,
+while =-l= is a Lisp variable reference.
+
 =cmd= is the single-command sibling of a pipe stage: the head resolves
 like the first word of a command line, the arguments are evaluated
 Lisp expressions (so variables work; bare words do not), and the exit
-status comes back. =run= is its function counterpart when the program
-name itself is computed.
+status comes back. =run= is its function counterpart when the program name
+itself is computed, but retains ordinary function-call semantics and does not
+splice lists. Spread a computed list explicitly when needed:
+
+#+begin_src lisp
+(apply #'run "ls" "-1" (glob "screenshot-*"))
+#+end_src
 
 Redirection is spelled as stages, recognized by name inside =pipe= and
 =capture=: =(from "file")= first feeds standard input, =(to "file")=
@@ -431,9 +446,7 @@ And from the command line, capture inside a substitution:
 echo deployed (capture (git "rev-parse" "--short" "HEAD"))
 #+end_src
 
-(Stage arguments are evaluated, so literal words such as =rev-parse=
-and =HEAD= must be strings unless same-named variables are bound.) File
-redirection is byte-transparent, =capture= decodes UTF-8, and error
+File redirection is byte-transparent, =capture= decodes UTF-8, and error
 redirection covers builtin stages' =*error-output*= too. =error-to=
 and =merge-error= are mutually exclusive.
 

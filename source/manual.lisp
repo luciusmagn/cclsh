@@ -69,7 +69,7 @@ forms become one call.
   echo (*balls*)                    HI, the value of *balls*
   echo (+ 1 2)                      3, several forms are a call
   echo (string-downcase *balls*)    hi
-  echo (list 1 2 3)                 1 2 3, lists splice
+  echo (list 1 2 3)                 1 2 3, proper lists splice
   echo (getenv 'missing)            nothing at all, NIL vanishes
   echo x(+ 1 2)y                    x3y, in-word concatenation
   cd (*project-directory*)          anywhere a word can go
@@ -145,12 +145,15 @@ quicklisp-setup loads or installs it when running from an unsaved development
 image.
 commands lists everything currently defined.")
 
-    ("pipelines" "pipe, seq, all and any"
+    ("pipelines" "pipe, capture, glob, seq, all and any"
      "Process orchestration is spelled in Lisp. A stage is (name
 argument...) where NAME resolves like a command word and the arguments
-are evaluated expressions:
+are evaluated expressions. A scalar becomes one string, NIL vanishes,
+and a proper list splices one level. Strings stay literal, so quote
+flags and use glob for explicit filesystem expansion:
 
   (pipe (ls \"-la\") (grep \"lisp\"))     ls -la | grep lisp
+  (pipe (ls \"-1\" (glob \"screenshot-*\")) (wc \"-l\"))
   (seq (make \"clean\") (make))          make clean ; make
   (all (make) (make \"install\"))        make && make install
   (any (probe) (echo \"fallback\"))      probe || echo fallback
@@ -160,6 +163,15 @@ are evaluated expressions:
 
   (defcommand emit () (format t \"b~%a~%\") 0)
   (pipe (emit) (sort))                 builtins can sit in pipes
+
+glob applies the same ~, environment-variable, * and ? expansion as a
+bare command word and returns the matches as an ordinary list. Matches
+are sorted within each pattern, pattern order is retained, and an
+unmatched pattern remains literal. A glob result can be stored or
+filtered before a stage splices it. run does not splice lists; spread
+one explicitly with apply:
+
+  (apply #'run \"ls\" \"-1\" (glob \"screenshot-*\"))
 
 Redirection is spelled as stages, and capture returns output as a
 string (sh's $(cmd)), trailing newlines trimmed:

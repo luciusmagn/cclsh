@@ -270,6 +270,18 @@ implicit directory change is safe only when the final command has one word."
           while prefixes)
     (sort (remove-duplicates prefixes :test #'string=) #'string<)))
 
+(defun glob (&rest patterns)
+  "Expand string PATTERNS into one flat argument list.
+
+Expansion uses the same tilde, environment-variable, * and ? rules as a bare
+command word. Matches are sorted within each pattern, pattern order is
+preserved, and a pattern with no matches remains literal. A proper list used
+as a CMD, PIPE, CAPTURE, SEQ, ALL or ANY stage argument is spliced into that
+stage's argument vector, so (glob \"*.lisp\") composes directly with them."
+  (loop for pattern in patterns
+        do (check-type pattern string)
+        append (word-expand pattern)))
+
 
 ;;; Lisp substitution
 

@@ -570,6 +570,48 @@ exit 0
         do (integration-require-success
             result (format nil "saved-image startup ~d" attempt))))
 
+(defun integration-check-lisp-glob ()
+  "Require the saved image to export GLOB and splice its ordinary list."
+  (let* ((directory (integration-path "lisp-glob/"))
+         (alpha     (concatenate 'string directory "alpha.screenshot"))
+         (space     (concatenate 'string directory
+                                 "beta space.screenshot"))
+         (pattern   (concatenate 'string directory "*.screenshot"))
+         (expected  (format nil "<~a>~%<~a>" alpha space))
+         (form
+           (format nil
+                   "(progn
+                      (let ((matches (glob ~s)))
+                        (multiple-value-bind (text status)
+                            (capture (printf \"<%s>\\\\n\" matches))
+                          (format t
+                                  \"__GLOB_CAPTURE__~~s__GLOB_STATUS__~~d__~~%\"
+                                  text status)))
+                      (multiple-value-bind (text status)
+                          (capture (printf \"%s\" ~s))
+                        (format t
+                                \"__LITERAL_CAPTURE__~~s__LITERAL_STATUS__~~d__~~%\"
+                                text status))
+                      (values))"
+                   pattern pattern)))
+    (integration-write-file alpha "alpha")
+    (integration-write-file space "space")
+    (let* ((result (integration-run form))
+           (output (direct-result-output result)))
+      (integration-require-success result "saved-image Lisp glob")
+      (integration-ensure
+       (integration-contains-p
+        (format nil "__GLOB_CAPTURE__~s__GLOB_STATUS__0__" expected)
+        output)
+       "saved-image glob did not splice sorted matches: ~a"
+       (integration-tail output))
+      (integration-ensure
+       (integration-contains-p
+        (format nil "__LITERAL_CAPTURE__~s__LITERAL_STATUS__0__" pattern)
+        output)
+       "ordinary saved-image string globbed implicitly: ~a"
+       (integration-tail output)))))
+
 (defun integration-check-command-line-modes ()
   "Require combined flags and stateless scripting modes to honor user state."
   (let* ((xdg              (integration-path "argument-modes-config/"))
@@ -2158,6 +2200,8 @@ exit 0
                         #'integration-check-image-startup)
       (integration-test "command-line modes and user state"
                         #'integration-check-command-line-modes)
+      (integration-test "explicit Lisp glob arguments"
+                        #'integration-check-lisp-glob)
       (integration-test "provider-neutral default prompt"
                         #'integration-check-default-prompt)
       (integration-test "current package environment"
