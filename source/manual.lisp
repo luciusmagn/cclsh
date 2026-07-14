@@ -204,6 +204,8 @@ reports an error for them. Builtin stages inside pipe are controlled
 with the rest of their pipeline and can be stopped and resumed. Ctrl-Z
 during another busy Lisp evaluation stops the shell itself, so avoid
 that one. exit with stopped jobs warns once, exit again to leave anyway.
+Every orderly exit sends SIGHUP to live job groups and SIGCONT to stopped
+groups so they do not linger after logout.
 jobs, fg and bg are ordinary functions too: (fg 1) resumes job 1 from
 Lisp.")
 
@@ -293,7 +295,8 @@ configured command strings in cclsh-user:
 
 A broken startup file prints its error and the shell starts anyway.
 CCLSH_SAFE=1 skips startup.lisp and history entirely, the escape hatch
-when user state misbehaves.")
+when user state misbehaves. The repository's examples/startup.lisp is
+a sanitized login-safe starting point.")
 
     ("directories" "directory hooks and zoxide"
      "Register a function to observe every successful directory change:
@@ -337,39 +340,55 @@ and -l -c works too. CCLSH_SAFE=1 suppresses startup.lisp even here.
 
 Script files work as shebang interpreters:
 
-  #!/home/mag/.local/bin/cclsh
+  #!/usr/local/bin/cclsh
   (format t \"deploying~%\")
   (all (make \"build\") (make \"deploy\"))
 
+*argv* is a list containing the script path followed by every argument
+after it, and is NIL outside script mode. Arguments beginning with a dash
+remain script data. Use -- before a dash-prefixed script path:
+
+  cclsh -- -provision.cclsh alpha
+
+Keep the executable basename cclsh. The patched CCL kernel recognizes that
+name when preserving command and script arguments.
+
 The process exit code is the last status, or the argument of exit. -c
-is what ssh, scp, rsync and git invoke, so remote operations work with
-cclsh as a login shell; the string uses cclsh syntax, not sh.")
+is what ssh invokes, so remote commands skip user state. Programs already
+visible in sshd's PATH work directly; user-profile-only tools need an
+absolute path or a system-visible wrapper. The string uses cclsh syntax,
+not sh.")
 
     ("login" "using cclsh as a login shell"
-     "Point the login shell at a real copy outside the repository,
-~/.local/bin/cclsh from scripts/install. On Guix:
+     "Install and register a root-owned copy outside the repository:
 
-  (user-account
-   (name \"mag\")
-   (shell \"/home/mag/.local/bin/cclsh\"))
+  make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \\
+    CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+  sudo make install-login-shell LOGIN_USER=USER
+  sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \\
+    SHELL=/usr/local/bin/cclsh \\
+    /usr/local/bin/cclsh -lc 'zoxide --version'
+  sudo chsh -s /usr/local/bin/cclsh USER
+  getent passwd USER
 
 Plain -c skips all user state for remote safety. -lc, -cl, -ic and
 -l -c load startup.lisp before running their command, so $SHELL -lc
 sees the configured login environment. Other flags are ignored so odd
-login invocations cannot lock you out. scripts/install puts a matched
-CCL kernel and cclsh.image beside each other with atomic renames, and
-the kernel sets SHELL to itself.
-Keep ccl installed in your Guix profile: the copied kernel can still
-link glibc from the store through CCL's closure, and guix gc could
-otherwise collect it out from under your login. Nothing sources
-/etc/profile for you, so own PATH at the top of startup.lisp:
+login invocations cannot lock you out. login-build attests the required CCL
+patches and exact kernel/image hashes. install-login-shell rejects an absent
+or stale attestation, probes the candidate as USER before activation, then
+registers its stable path in /etc/shells. Registration failure restores the
+previous release. It never changes an account. USER must have a private
+primary group, and one stable path can serve only one login account. Use a
+different BINDIR for another account.
 
-  (setenv 'path (format nil \"~a/.local/bin:~a\"
-                        (getenv 'home) (getenv 'path)))
+Nothing sources /etc/profile for you. Copy examples/startup.lisp and
+keep /usr/local/bin, /usr/bin and /bin in PATH.
 
 Keep root on a stock shell. Emergency access past broken user state:
 
-  ssh host -t env CCLSH_SAFE=1 /home/mag/.local/bin/cclsh"))
+  env CCLSH_SAFE=1 /usr/local/bin/cclsh
+  sudo chsh -s /usr/bin/fish USER"))
   "The built-in manual: (name one-liner body) per section.")
 
 (defun manual--heading (text)

@@ -21,7 +21,7 @@ projects, for example in =~/quicklisp/local-init/common-lisp.lisp=:
 
 #+begin_src lisp
 (in-package #:quicklisp-client)
-(pushnew #P"/root/common-lisp/"
+(pushnew (merge-pathnames #P"common-lisp/" (user-homedir-pathname))
          *local-project-directories*
          :test #'equal)
 #+end_src
@@ -33,20 +33,88 @@ other than =~/quicklisp/setup.lisp=. The build stops before saving an image if
 Quicklisp is unavailable, Clinedi resolves outside its registered local
 checkout, or the checkout is dirty or differs from =dependencies.lock=.
 
-* Building
+* Building and installation
 
 #+begin_src sh
-scripts/build
+make build
 #+end_src
 
 This produces a matched =cclsh= kernel executable and =cclsh.image=
-heap image in the repository root. Keeping the image adjacent instead
-of appending it to the kernel avoids an intermittent CCL 1.13 image
-resume failure on current Linux. Alternatively, from a running CCL:
+heap image in the repository root. The build accepts =CCL= and =CCL_IMAGE=
+Make variables when the kernel and boot image do not come from the same
+installed =ccl= command.
+
+Current upstream CCL truncates Linux x86-64 extended signal state when it
+moves a signal frame between stacks. That can make Linux reject
+=rt_sigreturn=, so an unpatched kernel is not suitable for login-shell duty.
+This repository carries a modernized full-XSAVE fix based on CCL's earlier
+upstream work. With a sibling CCL checkout:
+
+#+begin_src sh
+make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
+  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+#+end_src
+
+The boot-image path is distribution-specific. =ccl-linux-xstate.patch=
+validates and copies the complete aligned signal state. See CCL issue 85 and
+upstream commit =b1a59e443344f6f79d1069e1902de5d04c14e2e3= for the original
+diagnosis. =ccl-cclsh-argv.patch= makes CCL stop consuming kernel options at
+cclsh's own option boundary, so script =*argv*= remains literal.
+=login-build= applies both patches, builds through that exact source kernel,
+then writes =cclsh.attestation= binding both artifact and patch hashes. It
+serializes the full CCL rebuild, image publication and attestation. Set
+=CCL_IMAGE= when the source checkout has no adjacent =lx86cl64.image=.
+It patches the supplied CCL checkout in place and leaves those tracked source
+changes present for inspection and subsequent rebuilds.
+
+Alternatively, for non-login development from a running CCL:
 
 #+begin_src lisp
 (asdf:load-system "cclsh")
 (cclsh:main)
+#+end_src
+
+For a user-local copy, including a rebuild and staged validation:
+
+#+begin_src sh
+scripts/install                         # ~/.local/bin/cclsh
+#+end_src
+
+For a root-owned login-shell installation:
+
+#+begin_src sh
+CCLSH_QUICKLISP_SETUP=/home/USER/quicklisp/setup.lisp \
+  make login-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
+    CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+sudo make install-login-shell LOGIN_USER=USER
+sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
+  SHELL=/usr/local/bin/cclsh /usr/local/bin/cclsh -lc 'zoxide --version'
+sudo chsh -s /usr/local/bin/cclsh USER  # change one account explicitly
+#+end_src
+
+=install-login-shell= prepares a content-addressed kernel/image release,
+validates it as =LOGIN_USER= before activation, switches the stable symlink,
+then updates =/etc/shells=. A registration failure restores the previous
+release. It refuses an unattested build and does not change any account. The
+unprivileged build retains its Quicklisp tree; the privileged step only
+installs already validated artifacts and makes the saved image readable by
+root and =LOGIN_USER=, not every local account. This requires =LOGIN_USER= to
+have a private primary group. One stable path serves one login account; use a
+different =BINDIR= for another account. The installer rejects a shared group,
+an existing different login owner and owner-only updates of a registered
+login shell.
+=PREFIX=, =BINDIR=, =SHELLS_FILE= and =LOGIN_USER= are Make variables. Keep
+another account, especially =root=, on a stock shell.
+For a custom system destination or =SHELLS_FILE=, every parent must be
+canonical, root-owned and not writable by non-root users.
+
+Copy the sanitized starter configuration and make it private:
+
+#+begin_src sh
+mkdir -p ~/.config/cclsh
+cp examples/startup.lisp ~/.config/cclsh/startup.lisp
+chmod 700 ~/.config/cclsh
+chmod 600 ~/.config/cclsh/startup.lisp
 #+end_src
 
 Run the regression checks with:
@@ -94,15 +162,26 @@ scripts/integration-check
 - Job control: =command &= starts a background job, Ctrl-Z stops the
   foreground command or pipeline, =jobs=, =fg= and =bg= manage them,
   and finished background jobs are announced before the next prompt.
-  =exit= warns once about stopped jobs.
+  =exit= warns once about stopped jobs. Orderly exit sends SIGHUP to live
+  jobs and SIGCONT to stopped jobs so logout does not leave them behind.
 - =cclsh -c command=, script files, shebang scripts and piped input run
-  without user state, which keeps ssh, scp, rsync and git working when
-  cclsh is a login shell. Add =l= or =i= to command mode, such as
+  without user state. Remote operations therefore work for executables
+  already visible in sshd's environment, including ordinary system installs
+  of scp, rsync and git; user-profile-only tools need an absolute path or a
+  system-visible wrapper. Add =l= or =i= to command mode, such as
   =cclsh -lc command=, to load =startup.lisp= first. Short flags combine
   in any order. =CCLSH_SAFE=1= always skips startup.lisp and history.
+- Scripts receive =*argv*= as a list containing the script path followed by
+  every argument after it. Arguments are preserved literally and are not
+  parsed as cclsh options. It is =nil= outside script mode. Use
+  =cclsh -- -script.cclsh argument= for a dash-prefixed script path. Keep the
+  executable basename =cclsh=, as the CCL kernel uses that name to recognize
+  cclsh's argument boundary.
 - Environment variables are lispy: =(setenv 'editor "vim")=,
   =(getenv :home)=, =(setf (env 'port) 8000)=, plus =export= and
-  =unset= builtins.
+  =unset= builtins. =CCLSH_PACKAGE= contains the canonical name of the
+  current Lisp package and is refreshed before Starship and external
+  commands launched through cclsh run.
 - =(zoxide-setup)= enables =z=, =zi= and automatic recording of every
   successful =cd=. It is safe to call once from =startup.lisp= and does
   nothing destructive when zoxide is unavailable.
@@ -162,4 +241,4 @@ The =help= builtin prints the built-in manual (=help substitution= etc.);
 * Not yet
 
 => < >>= characters in command mode (use the Lisp redirection
-stages), script argv, and a right-side prompt.
+stages), and a right-side prompt.
