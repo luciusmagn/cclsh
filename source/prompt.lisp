@@ -16,12 +16,15 @@
                               (format nil "--cmd-duration=~d" duration-milliseconds)
                               (format nil "--terminal-width=~d" columns)
                               (format nil "--jobs=~d" (jobs-count))))
-             (process   (run-program "starship" arguments
-                                     :input  nil
-                                     :output output
-                                     :error  nil
-                                     :wait   t
-                                     :external-format ':utf-8)))
+             (process
+               (environment-call-with-package
+                (lambda ()
+                  (run-program "starship" arguments
+                               :input  nil
+                               :output output
+                               :error  nil
+                               :wait   t
+                               :external-format ':utf-8)))))
         (multiple-value-bind (state code)
             (external-process-status process)
           (let ((prompt (get-output-stream-string output)))

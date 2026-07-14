@@ -132,12 +132,14 @@ Hook failures are reported without rolling back cd or skipping later hooks."
       127
       (handler-case
           (zoxide--process-status
-           (run-program program (list "add" "--" directory)
-                        :input           nil
-                        :output          nil
-                        :error           *error-output*
-                        :wait            t
-                        :external-format ':utf-8))
+           (environment-call-with-package
+            (lambda ()
+              (run-program program (list "add" "--" directory)
+                           :input           nil
+                           :output          nil
+                           :error           *error-output*
+                           :wait            t
+                           :external-format ':utf-8))))
         (serious-condition ()
           126))))
 

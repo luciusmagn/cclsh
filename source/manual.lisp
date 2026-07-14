@@ -269,7 +269,16 @@ From Lisp, names are designators and values stringify:
   (environment-variables)         live NAME=value list
 
 Lowercase names like http_proxy need strings. ~ does not expand after
-=, use $HOME in values.")
+=, use $HOME in values.
+
+CCLSH_PACKAGE is maintained automatically as the canonical name of the
+current Lisp package. It is refreshed before Starship renders a prompt and
+for external commands launched through cclsh, including after
+(in-package ...). Direct CCL:RUN-PROGRAM calls bypass that snapshot.
+Display it with a custom.cclsh_package Starship module guarded by both an
+empty STARSHIP_SHELL and a nonempty CCLSH_PACKAGE. Fish sets STARSHIP_SHELL
+to fish, so a fish process started below cclsh keeps the package segment
+hidden.")
 
     ("startup" "configuration and safe mode"
      "~/.config/cclsh/startup.lisp loads for interactive sessions and

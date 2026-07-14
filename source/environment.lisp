@@ -34,12 +34,54 @@
 (defvar *environment-lock* (ccl:make-lock "cclsh environment")
   "Serializes libc environment reads and mutations.")
 
+(defconstant +package-environment-variable+ "CCLSH_PACKAGE"
+  "Environment variable containing the current Lisp package name.")
+
 (defun environment-name (designator)
   "Normalize an environment variable DESIGNATOR to a name string.
    Symbols and keywords use their symbol name."
   (etypecase designator
     (symbol (symbol-name designator))
     (string designator)))
+
+(defun environment--set-string (name text)
+  "Set environment NAME to string TEXT while the caller holds the lock."
+  (ccl::with-utf-8-cstr (encoded-name name)
+    (ccl::with-utf-8-cstr (encoded-text text)
+      (unless (zerop (external-call "setenv"
+                                    :address encoded-name
+                                    :address encoded-text
+                                    :int 1
+                                    :int))
+        (error 'environment-error
+               :operation "set"
+               :name name
+               :code (ccl::get-errno)))))
+  text)
+
+(defun environment--package-name ()
+  "Return the canonical name of the current package, or an empty string."
+  (or (package-name *package*) ""))
+
+(defun environment--package-sync ()
+  "Update CCLSH_PACKAGE while the caller holds the environment lock."
+  (environment--set-string +package-environment-variable+
+                           (environment--package-name)))
+
+(defun environment-package-sync ()
+  "Set CCLSH_PACKAGE to the canonical name of the current Lisp package.
+Return the name so a subprocess launcher can use the same stable snapshot."
+  (ccl:with-lock-grabbed (*environment-lock*)
+    (environment--package-sync)))
+
+(defun environment-call-with-package (function)
+  "Call FUNCTION while CCLSH_PACKAGE names the current Lisp package.
+Hold the environment lock until FUNCTION returns so CCL subprocess launchers
+inherit the same UTF-8 libc environment value without using CCL's lossy
+per-process environment encoder."
+  (ccl:with-lock-grabbed (*environment-lock*)
+    (environment--package-sync)
+    (funcall function)))
 
 (defun getenv (name)
   "Value of the environment variable NAME (symbol or string), or NIL."
@@ -59,17 +101,7 @@
                   value
                   (princ-to-string value))))
     (ccl:with-lock-grabbed (*environment-lock*)
-      (ccl::with-utf-8-cstr (encoded-name name)
-        (ccl::with-utf-8-cstr (encoded-text text)
-          (unless (zerop (external-call "setenv"
-                                        :address encoded-name
-                                        :address encoded-text
-                                        :int 1
-                                        :int))
-            (error 'environment-error
-                   :operation "set"
-                   :name name
-                   :code (ccl::get-errno)))))))
+      (environment--set-string name text)))
   value)
 
 (defun unsetenv (name)
@@ -94,8 +126,10 @@
 
 (defun environment-variables ()
   "Return the current environment as a sorted list of NAME=value
-   strings, read live from libc's environ."
+   strings, read live from libc's environ. CCLSH_PACKAGE is refreshed
+   in the same critical section so child-process snapshots stay coherent."
   (ccl:with-lock-grabbed (*environment-lock*)
+    (environment--package-sync)
     (let ((environ
             (ccl:%get-ptr (ccl:foreign-symbol-address "environ")))
           (entries nil))

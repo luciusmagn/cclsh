@@ -192,6 +192,7 @@ n=0
 if test -r \"$file\"; then read n < \"$file\"; fi
 n=$((n + 1))
 printf '%s\\n' \"$n\" > \"$file\"
+printf '%s\\n' \"\${CCLSH_PACKAGE-}\" > \"$CCLSH_TEST_ROOT/prompt-package\"
 printf '你好 🐈 λ __CCLSH_PROMPT_%s__ ' \"$n\"
 ")
   (integration-write-program
@@ -608,6 +609,45 @@ exit 0
         (direct-result-output result))
        "piped input loaded user state: ~a"
        (integration-tail (direct-result-output result))))))
+
+(defun integration-check-package-environment ()
+  "Require package changes to reach Starship and external children."
+  (let* ((package-name "CCLSH-INTEGRATION-猫-PACKAGE")
+         (prompt-file  (integration-path "prompt-package"))
+         (result
+           (integration-run
+            "(progn
+               (defpackage #:cclsh-integration-猫-package (:use #:cl))
+               (in-package #:cclsh-integration-猫-package)
+               (cclsh:setenv \"CCLSH_PACKAGE\" \"STALE\")
+               (multiple-value-bind (output status)
+                   (cclsh::pipeline-capture
+                    (list (list \"/usr/bin/printenv\"
+                                \"CCLSH_PACKAGE\")))
+                 (format t \"__PACKAGE_CHILD__~a:~d__~%\"
+                         output status))
+               (cclsh:setenv \"CCLSH_PACKAGE\" \"STALE\")
+               (cclsh::prompt-starship 0 0 80)
+               (format t \"__PACKAGE_PROCESS__~a__~%\"
+                       (cclsh:getenv \"CCLSH_PACKAGE\"))
+               (values))"))
+         (output (direct-result-output result)))
+    (integration-require-success result "current package environment")
+    (integration-ensure
+     (integration-contains-p
+      (format nil "__PACKAGE_CHILD__~a:0__" package-name) output)
+     "external child did not inherit the current package: ~a"
+     (integration-tail output))
+    (integration-ensure
+     (integration-contains-p
+      (format nil "__PACKAGE_PROCESS__~a__" package-name) output)
+     "Starship rendering did not refresh the process package: ~a"
+     (integration-tail output))
+    (integration-ensure
+     (and (probe-file prompt-file)
+          (string= (format nil "~a~%" package-name)
+                   (integration-read-file prompt-file)))
+     "Starship did not inherit the current package")))
 
 (defun integration-check-baked-quicklisp ()
   "Require the saved image to contain a working Quicklisp entry point."
@@ -1934,6 +1974,8 @@ exit 0
                         #'integration-check-image-startup)
       (integration-test "command-line modes and user state"
                         #'integration-check-command-line-modes)
+      (integration-test "current package environment"
+                        #'integration-check-package-environment)
       (integration-test "Quicklisp baked into saved image"
                         #'integration-check-baked-quicklisp)
       (integration-test "Clinedi baked into saved image"

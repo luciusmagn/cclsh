@@ -186,6 +186,28 @@ does not expand after === in command mode, use =$HOME= in values
 instead. In =cclsh-user=, =export= designates the shell command; use
 =cl:export= for the package operator.
 
+cclsh maintains =CCLSH_PACKAGE= as the canonical name of the current
+Lisp package. It refreshes the value before rendering every prompt and in
+each command environment launched through cclsh, including after
+=(in-package ...)=. Direct calls to CCL's lower-level =run-program= bypass
+cclsh's environment snapshot. A
+guarded Starship custom module can put it at the end of a prompt's first
+line:
+
+#+begin_src toml
+# Add ${custom.cclsh_package} at the end of the first-line part of `format`.
+[custom.cclsh_package]
+shell = ["sh"]
+when = 'test -z "$STARSHIP_SHELL" && test -n "$CCLSH_PACKAGE"'
+command = 'printf %s "$CCLSH_PACKAGE"'
+format = " [$output]($style)"
+style = "bold purple"
+#+end_src
+
+The guard renders the module only for cclsh's deliberately blank
+=STARSHIP_SHELL=. Fish sets that variable to =fish=, so even a fish process
+started from cclsh inherits no package segment or placeholder.
+
 * Defining your own commands
 
 =defcommand= creates a command callable both from the command line and

@@ -558,6 +558,46 @@
                                   :if-does-not-exist ':ignore))))
 
 
+;;;; -- Current package environment --
+
+(let* ((variable     "CCLSH_PACKAGE")
+       (package-name  (format nil "CCLSH-CHECK-猫-PACKAGE-~d"
+                              (ccl:external-call "getpid" :int)))
+       (package       (make-package package-name :use nil))
+       (old-variable  (cclsh:getenv variable)))
+  (unwind-protect
+      (let ((*package* package))
+        (cclsh:setenv variable "STALE")
+        (check-equal "package sync returns the canonical name"
+                     package-name
+                     (cclsh::environment-package-sync))
+        (check-equal "package sync updates CCLSH_PACKAGE"
+                     package-name
+                     (cclsh:getenv variable))
+
+        (cclsh:setenv variable "STALE")
+        (check-equal "environment snapshot refreshes CCLSH_PACKAGE"
+                     t
+                     (not
+                      (null
+                       (find (format nil "~a=~a" variable package-name)
+                             (cclsh:environment-variables)
+                             :test #'string=))))
+
+        (cclsh:setenv variable "STALE")
+        (multiple-value-bind (output status)
+            (cclsh::pipeline-capture
+             (list (list "/usr/bin/printenv" variable)))
+          (check-equal "external child receives current Lisp package"
+                       0 status)
+          (check-equal "external child package value is exact"
+                       package-name output)))
+    (delete-package package)
+    (if old-variable
+        (cclsh:setenv variable old-variable)
+        (cclsh::unsetenv variable))))
+
+
 ;;;; -- UTF-8 environment --
 
 (let* ((name  "CCLSH_CHECK_ŽLUŤ")

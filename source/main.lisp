@@ -153,6 +153,7 @@
     (let ((*package* (find-package '#:cclsh-user))
           (duration  0)
           (failures  0))
+      (environment-package-sync)
       (when (and interactive (not safe))
         (startup-load))
       (loop
@@ -208,6 +209,7 @@
   (terminal-shell-attributes-save)
   (environment-setup)
   (let ((*package* (find-package '#:cclsh-user)))
+    (environment-package-sync)
     (when (and configured-p (not (shell-safe-mode-p)))
       (startup-load))
     (dispatch-line command))
