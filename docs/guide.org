@@ -698,6 +698,28 @@ name to stop its own option parser at cclsh's command or script boundary.
 The process exit code is the shell's last status, or the argument of
 =exit=.
 
+By the way, the Quicklisp relationship runs in both directions. cclsh is
+an ordinary ASDF system, so any Common Lisp program can quickload it and
+call its process helpers directly, without starting the shell or calling
+=(main)=. =run=, =cmd=, =pipe=, =capture=, =seq=, =all=, =any=, =glob=
+and =defcommand= all work as soon as the system is loaded:
+
+#+begin_src lisp
+(ql:quickload :cclsh)
+
+(cclsh:capture (git "rev-parse" "--short" "HEAD")) ; => "3e45271", 0
+(cclsh:all (make "test") (make "install"))
+#+end_src
+
+Command designators such as =git= and =make= are read as plain symbols in
+the calling package; only the printed name matters, so nothing needs
+importing just to name a program. Package-qualify the macros and
+functions, or pull in exactly what a script needs with =:import-from=,
+rather than =:use=-ing =cclsh= wholesale, since it shadows =cl:export=
+for its own environment builtin. Pipeline execution takes the terminal's
+foreground process group only when one is attached, so this works the
+same from a batch script, a build tool or a bare REPL.
+
 * Using cclsh as your login shell
 
 cclsh is written to survive login shell duty, but change your login
