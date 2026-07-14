@@ -150,6 +150,17 @@ login account; use another =BINDIR= for another account. =PREFIX=, =BINDIR=,
 =SHELLS_FILE= and =LOGIN_USER= are Make variables. Custom system paths must
 have canonical, root-owned parents that are not writable by non-root users.
 
+Root is supported, but give it a dedicated stable path rather than sharing an
+ordinary user's login-managed installation:
+
+#+begin_src sh
+sudo make install-login-shell LOGIN_USER=root BINDIR=/usr/local/sbin
+#+end_src
+
+This only installs and registers the shell. It does not change root's account.
+Before running =chsh= for root, keep an existing privileged session open and
+verify a boot-loader or live-system recovery route.
+
 Before probing configured mode, copy the sanitized starter configuration and
 make it private:
 
@@ -174,7 +185,9 @@ sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
 sudo chsh -s /usr/local/bin/cclsh USER
 #+end_src
 
-Keep another account, especially =root=, on a stock shell.
+The conservative choice is to keep =root= or another privileged recovery
+account on a stock shell. If every privileged account uses cclsh, keep a tested
+boot-loader or live-system recovery route instead.
 
 Run the regression checks with:
 

@@ -42,10 +42,6 @@ if [ -n "$probe_user" ]; then
         echo "cclsh register-shell: could not resolve the probe user" >&2
         exit 1
     fi
-    if [ "$probe_uid" -eq 0 ]; then
-        echo "cclsh register-shell: probe user must not be root" >&2
-        exit 1
-    fi
 fi
 case "$shell_path" in
     /*) ;;
@@ -171,7 +167,7 @@ if [ "$canonical_shells_file" = /etc/shells ]; then
     fi
     if [ -z "$probe_user" ]; then
         echo \
-            "cclsh register-shell: a non-root probe user is required for /etc/shells" \
+            "cclsh register-shell: a probe user is required for /etc/shells" \
             >&2
         exit 1
     fi

@@ -164,20 +164,27 @@ then
 fi
 
 if [ "$(id -u)" -eq 0 ]; then
-    if CCLSH_SKIP_BUILD=1 \
-       CCLSH_KERNEL_ARTIFACT="$source_shell" \
-       CCLSH_IMAGE_ARTIFACT="$source_image" \
-       CCLSH_INSTALL_DIRECTORY="$temporary_directory/root-login-bin" \
-       CCLSH_LOGIN_USER=root \
-       CCLSH_SHELLS_FILE="$shells_file" \
-       CCLSH_BUILD_ATTESTATION="$attestation" \
-       scripts/install >/dev/null 2>&1
+    chmod 755 "$temporary_directory"
+    root_install_directory=$temporary_directory/root-login-bin
+    root_shell=$root_install_directory/cclsh
+    CCLSH_SKIP_BUILD=1 \
+    CCLSH_KERNEL_ARTIFACT="$source_shell" \
+    CCLSH_IMAGE_ARTIFACT="$source_image" \
+    CCLSH_INSTALL_DIRECTORY="$root_install_directory" \
+    CCLSH_LOGIN_USER=root \
+    CCLSH_SHELLS_FILE="$shells_file" \
+    CCLSH_BUILD_ATTESTATION="$attestation" \
+        scripts/install >/dev/null
+    root_release=$(realpath -e -- "$root_shell")
+    if [ ! -L "$root_shell" ] || [ ! -L "$root_shell.image" ] ||
+       [ "$(stat -c '%a:%u:%g' "$root_release")" != 755:0:0 ] ||
+       [ "$(stat -c '%a:%u:%g' "$root_release.image")" != 640:0:0 ] ||
+       [ "$(stat -c '%a:%u:%g' "$root_release.attestation")" != 600:0:0 ] ||
+       [ "$(stat -c '%a:%u:%g' "$root_release.login-uid")" != 600:0:0 ] ||
+       [ "$(cat "$root_release.login-uid")" != 0 ] ||
+       [ "$(grep -Fxc -- "$root_shell" "$shells_file")" -ne 1 ]
     then
-        echo "login install accepted root as its probe user" >&2
-        exit 1
-    fi
-    if [ -e "$temporary_directory/root-login-bin" ]; then
-        echo "rejected root login install wrote its destination" >&2
+        echo "root login install published incorrect release metadata" >&2
         exit 1
     fi
 fi
@@ -593,12 +600,8 @@ do
         exit 1
     fi
 done
-if [ "$(id -u)" -eq 0 ] &&
-   scripts/register-shell "$shell_path" "$shells_file" root \
-       >/dev/null 2>&1
-then
-    echo "register-shell accepted root as its probe user" >&2
-    exit 1
+if [ "$(id -u)" -eq 0 ]; then
+    scripts/register-shell "$shell_path" "$shells_file" root >/dev/null
 fi
 
 resolved_image=$second_release.image

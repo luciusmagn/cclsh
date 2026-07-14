@@ -695,7 +695,7 @@ Recommendations, in order:
    =/etc/profile= or fish configuration, so make sure =PATH= retains
    =/usr/local/bin=, =/usr/bin= and =/bin=.
 4. Probe that real startup as the target account, then change only that one
-   ordinary account:
+   account:
 
    #+begin_src sh
    sudo -u USER env HOME=/home/USER XDG_CONFIG_HOME=/home/USER/.config \
@@ -714,8 +714,19 @@ Recommendations, in order:
    If startup enables zoxide or another optional tool, probe it separately
    after these guaranteed checks pass.
 
-5. Keep =root= or another recovery account on a stock shell. Never point
-   =/etc/passwd= at repository artifacts, which can disappear after a clean.
+5. The conservative choice is to keep =root= or another privileged recovery
+   account on a stock shell. Root is supported when you deliberately accept
+   boot or live-system recovery as the fallback. Give it a separate stable
+   path, keep an existing privileged session open while testing, and only then
+   change the account:
+
+   #+begin_src sh
+   sudo make install-login-shell LOGIN_USER=root BINDIR=/usr/local/sbin
+   sudo chsh -s /usr/local/sbin/cclsh root
+   #+end_src
+
+   Never point =/etc/passwd= at repository artifacts, which can disappear
+   after a clean.
 6. Rebuild and reinstall after changing CCL itself, then repeat the clean
    =--version= and =-c= probes before relying on the copied kernel.
 

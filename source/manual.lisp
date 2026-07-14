@@ -430,7 +430,9 @@ or stale attestation, probes the candidate as USER before activation, then
 registers its stable path in /etc/shells. Registration failure restores the
 previous release. It never changes an account. USER must have a private
 primary group, and one stable path can serve only one login account. Use a
-different BINDIR for another account.
+different BINDIR for another account. Root is supported at a dedicated path:
+
+  sudo make install-login-shell LOGIN_USER=root BINDIR=/usr/local/sbin
 
 Probe optional startup tools such as zoxide separately after the guaranteed
 version, safe command and configured PATH checks pass.
@@ -438,7 +440,10 @@ version, safe command and configured PATH checks pass.
 Nothing sources /etc/profile for you. Keep /usr/local/bin, /usr/bin and /bin
 in PATH.
 
-Keep root on a stock shell. Emergency access past broken user state:
+The conservative choice is to keep root or another privileged recovery
+account on a stock shell. If root uses cclsh, keep an existing privileged
+session open while testing and verify boot-loader or live-system recovery.
+Emergency access past broken user state:
 
   env CCLSH_SAFE=1 /usr/local/bin/cclsh
   sudo chsh -s /usr/bin/fish USER"))

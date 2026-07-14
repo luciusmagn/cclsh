@@ -91,10 +91,6 @@ if [ -n "$login_user" ]; then
         echo "cclsh install: could not resolve the login account" >&2
         exit 1
     fi
-    if [ "$probe_uid" -eq 0 ]; then
-        echo "cclsh install: login user must not be root" >&2
-        exit 1
-    fi
     existing_directory=$install_directory
     while [ ! -e "$existing_directory" ] && [ ! -L "$existing_directory" ]; do
         parent_directory=$(dirname "$existing_directory")
