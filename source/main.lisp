@@ -318,13 +318,51 @@
   (ignore-errors
     (namestring (truename "/proc/self/exe"))))
 
+(defun shell--path-references-executable-p (path executable-path)
+  "True when PATH names EXECUTABLE-PATH, including through symlinks."
+  (and path
+       executable-path
+       (or (string= path executable-path)
+           (ignore-errors
+             (equal (truename path) (truename executable-path))))))
+
+(defun shell--invocation-path
+    (&key
+       (arguments *command-line-argument-list*)
+       (environment-shell (getenv "SHELL"))
+       (executable-path (shell--executable-path)))
+  "Stable shell path from argv[0], preserving an installed symlink.
+   Traditional login programs replace argv[0] with a dash-prefixed name;
+   in that case use an absolute SHELL only when it names this executable."
+  (let ((argument (first arguments)))
+    (cond ((and argument
+                (plusp (length argument))
+                (char= (char argument 0) #\/)
+                (shell--path-references-executable-p
+                 argument executable-path))
+           argument)
+          ((and argument
+                (plusp (length argument))
+                (char= (char argument 0) #\-)
+                environment-shell
+                (plusp (length environment-shell))
+                (char= (char environment-shell 0) #\/)
+                (shell--path-references-executable-p
+                 environment-shell executable-path))
+           environment-shell)
+          (t
+           nil))))
+
 (defun shell-toplevel ()
   "Entry point for the saved cclsh application. Sets SHELL to the
-   running binary so $SHELL callers land back in cclsh; a REPL session
-   through MAIN leaves SHELL alone."
+   stable invocation path, or the resolved running binary as fallback,
+   so $SHELL callers land back in cclsh. A REPL session through MAIN
+   leaves SHELL alone."
   (handler-case
       (progn
-        (let ((executable (shell--executable-path)))
+        (let ((executable
+                (or (shell--invocation-path)
+                    (shell--executable-path))))
           (when executable
             (setenv "SHELL" executable)))
         (shell--process-arguments (rest *command-line-argument-list*))

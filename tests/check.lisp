@@ -98,6 +98,32 @@
                  (multiple-value-list
                   (cclsh::shell--argument-plan arguments)))))
 
+(check-equal "absolute invocation path preserves an installed symlink"
+             "/usr/local/bin/cclsh"
+             (cclsh::shell--invocation-path
+              :arguments '("/usr/local/bin/cclsh" "-c" "exit 0")
+              :executable-path "/usr/local/bin/cclsh"))
+
+(check-equal "relative invocation path defers to the executable fallback"
+             nil
+             (cclsh::shell--invocation-path
+              :arguments '("cclsh" "-c" "exit 0")
+              :executable-path "/usr/local/bin/cclsh"))
+
+(check-equal "login argv uses the account's stable shell path"
+             "/usr/local/bin/cclsh"
+             (cclsh::shell--invocation-path
+              :arguments '("-cclsh")
+              :environment-shell "/usr/local/bin/cclsh"
+              :executable-path "/usr/local/bin/cclsh"))
+
+(check-equal "login argv rejects a stale inherited shell"
+             nil
+             (cclsh::shell--invocation-path
+              :arguments '("-cclsh")
+              :environment-shell "/bin/sh"
+              :executable-path "/usr/local/bin/cclsh"))
+
 
 ;;;; -- Multiline Lisp --
 
