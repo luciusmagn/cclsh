@@ -711,6 +711,7 @@ exit 0
                         (format t \"__ZO_FAIL_PWD__~~a__~~%\" (getenv \"PWD\"))
                         (format t \"__ZO_ADD_FAIL__~~d__~~%\" (cd ~s))
                         (delete-file ~s)
+                        (setenv \"PATH\" ~s)
                         (format t \"__ZO_MISSING_SETUP__~~d__~~%\"
                                 (zoxide-setup))
                         (multiple-value-bind (kind target)
@@ -721,9 +722,9 @@ exit 0
                             (cclsh::command-resolve-fresh \"zi\")
                           (declare (ignore target))
                           (format t \"__ZO_EXTERNAL_ZI__~~s__~~%\" kind))
-                        (run \"true\"))"
+                        (run \"/usr/bin/true\"))"
                      initial-add-fail root tracked direct missing
-                     add-fail zoxide-program))
+                     add-fail zoxide-program *integration-bin-directory*))
            (result (integration-run form))
            (output (direct-result-output result))
            (log    (and (probe-file log-path)
