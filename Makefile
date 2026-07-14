@@ -3,19 +3,22 @@ BINDIR ?= $(PREFIX)/bin
 DESTDIR ?=
 SHELLS_FILE ?= /etc/shells
 LOGIN_USER ?=
+PROBE_USER ?=
 CCL ?= ccl
 CCL_IMAGE ?=
 CCL_SOURCE ?= ../ccl
 
-.PHONY: build login-build ccl-kernel check integration-check install install-login-shell
+.PHONY: build system-shell-build login-build ccl-kernel check integration-check install install-system-shell install-login-shell
 
 build:
 	CCLSH_CCL="$(CCL)" CCLSH_CCL_IMAGE="$(CCL_IMAGE)" scripts/build
 
-login-build: CCL = $(CCL_SOURCE)/lx86cl64
-login-build:
+system-shell-build: CCL = $(CCL_SOURCE)/lx86cl64
+system-shell-build:
 	CCLSH_CCL_IMAGE="$(CCL_IMAGE)" scripts/login-build \
 		"$(CCL_SOURCE)" "$(CCL)" cclsh.attestation
+
+login-build: system-shell-build
 
 ccl-kernel:
 	scripts/ccl-kernel "$(CCL_SOURCE)"
@@ -43,24 +46,27 @@ integration-check:
 
 install:
 	@if test -z "$(DESTDIR)" && test "$$(id -u)" -eq 0; then \
-		echo "owner-only root install refused; use install-login-shell" >&2; \
+		echo "owner-only root install refused; use install-system-shell" >&2; \
 		exit 2; \
 	fi
 	CCLSH_SKIP_BUILD=1 CCLSH_INSTALL_DIRECTORY="$(DESTDIR)$(BINDIR)" \
 		scripts/install
 
-install-login-shell:
+install-system-shell:
 	@if test -n "$(DESTDIR)"; then \
-		echo "install-login-shell does not support DESTDIR" >&2; \
-		exit 2; \
-	fi
-	@if test -z "$(LOGIN_USER)"; then \
-		echo "install-login-shell requires LOGIN_USER" >&2; \
+		echo "install-system-shell does not support DESTDIR" >&2; \
 		exit 2; \
 	fi
 	CCLSH_SKIP_BUILD=1 \
 	CCLSH_INSTALL_DIRECTORY="$(BINDIR)" \
-	CCLSH_LOGIN_USER="$(LOGIN_USER)" \
+	CCLSH_SYSTEM_SHELL=1 \
+	CCLSH_PROBE_USER="$(PROBE_USER)" \
 	CCLSH_SHELLS_FILE="$(SHELLS_FILE)" \
 	CCLSH_BUILD_ATTESTATION="$(CURDIR)/cclsh.attestation" \
 		scripts/install
+
+install-login-shell:
+	@echo "install-login-shell is deprecated; installing one shared system shell" >&2
+	@$(MAKE) --no-print-directory install-system-shell \
+		BINDIR="$(BINDIR)" SHELLS_FILE="$(SHELLS_FILE)" \
+		PROBE_USER="$(if $(PROBE_USER),$(PROBE_USER),$(LOGIN_USER))"

@@ -116,6 +116,11 @@ if [ $((0$kernel_mode & 1)) -eq 0 ]; then
     echo "cclsh register-shell: shell is not executable by login users" >&2
     exit 1
 fi
+image_mode=$(stat -Lc %a "$image_path")
+if [ $((0$image_mode & 4)) -eq 0 ]; then
+    echo "cclsh register-shell: image is not readable by login users" >&2
+    exit 1
+fi
 
 directory-chain-check()
 {
@@ -145,7 +150,7 @@ directory-chain-check()
             exit 1
         fi
         checked_mode=$(stat -c %a "$checked_directory")
-        if [ $((0$checked_mode & 0100)) -eq 0 ]; then
+        if [ $((0$checked_mode & 1)) -eq 0 ]; then
             echo \
                 "cclsh register-shell: system directory is not traversable:" \
                 "$checked_directory" \
@@ -163,12 +168,6 @@ running_uid=$(id -u)
 if [ "$canonical_shells_file" = /etc/shells ]; then
     if [ "$running_uid" -ne 0 ]; then
         echo "cclsh register-shell: updating /etc/shells requires root" >&2
-        exit 1
-    fi
-    if [ -z "$probe_user" ]; then
-        echo \
-            "cclsh register-shell: a probe user is required for /etc/shells" \
-            >&2
         exit 1
     fi
 fi

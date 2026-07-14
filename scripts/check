@@ -70,3 +70,4 @@ fi
 tests/argument-boundary.sh
 tests/build-state-rollback.sh
 tests/install.sh
+tests/system-install.sh

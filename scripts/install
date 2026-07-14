@@ -1,12 +1,17 @@
 #!/bin/sh
 # Build cclsh, validate a staged copy and install its kernel and image.
-# CCLSH_INSTALL_DIRECTORY defaults to ~/.local/bin. CCLSH_LOGIN_USER
-# additionally probes, activates and registers a system login shell.
+# CCLSH_INSTALL_DIRECTORY defaults to ~/.local/bin. CCLSH_SYSTEM_SHELL=1
+# additionally activates and registers one shared system login shell.
 set -eu
 cd "$(dirname "$0")/.."
 
 install_directory=${CCLSH_INSTALL_DIRECTORY:-"$HOME/.local/bin"}
-login_user=${CCLSH_LOGIN_USER:-}
+system_shell=${CCLSH_SYSTEM_SHELL:-0}
+if [ "${CCLSH_PROBE_USER+x}" = x ]; then
+    probe_user=$CCLSH_PROBE_USER
+else
+    probe_user=${CCLSH_LOGIN_USER:-}
+fi
 shells_file=${CCLSH_SHELLS_FILE:-/etc/shells}
 probe_timeout=${CCLSH_PROBE_TIMEOUT:-10}
 probe_kill_after=${CCLSH_PROBE_KILL_AFTER:-2}
@@ -28,9 +33,24 @@ require_positive_seconds "$probe_timeout" "probe timeout"
 require_positive_seconds "$probe_kill_after" "probe kill timeout"
 require_positive_seconds "$lock_timeout" "lock timeout"
 
-if [ -n "$login_user" ] && [ "${CCLSH_SKIP_BUILD:-0}" != 1 ]; then
+case "$system_shell" in
+    0|1) ;;
+    *)
+        echo "cclsh install: CCLSH_SYSTEM_SHELL must be 0 or 1" >&2
+        exit 2
+        ;;
+esac
+if [ -n "${CCLSH_LOGIN_USER:-}" ]; then
+    system_shell=1
+fi
+if [ "$system_shell" -eq 0 ] && [ -n "$probe_user" ]; then
+    echo "cclsh install: CCLSH_PROBE_USER requires CCLSH_SYSTEM_SHELL=1" >&2
+    exit 2
+fi
+
+if [ "$system_shell" -eq 1 ] && [ "${CCLSH_SKIP_BUILD:-0}" != 1 ]; then
     echo \
-        "cclsh install: login installation requires prebuilt attested artifacts; set CCLSH_SKIP_BUILD=1" \
+        "cclsh install: system installation requires prebuilt attested artifacts; set CCLSH_SKIP_BUILD=1" \
         >&2
     exit 2
 fi
@@ -78,18 +98,20 @@ if [ "$install_directory" != "$canonical_install_directory" ]; then
     exit 2
 fi
 
-if [ -n "$login_user" ]; then
+if [ "$system_shell" -eq 1 ]; then
     if [ "$(id -u)" -ne 0 ]; then
-        echo "cclsh install: login installation requires root" >&2
+        echo "cclsh install: system installation requires root" >&2
         exit 1
     fi
-    if ! probe_uid=$(timeout -k "$probe_kill_after" "$probe_timeout" \
-         id -u "$login_user") ||
-       ! probe_gid=$(timeout -k "$probe_kill_after" "$probe_timeout" \
-         id -g "$login_user")
-    then
-        echo "cclsh install: could not resolve the login account" >&2
-        exit 1
+    if [ -n "$probe_user" ]; then
+        if ! probe_uid=$(timeout -k "$probe_kill_after" "$probe_timeout" \
+             id -u "$probe_user") ||
+           ! probe_gid=$(timeout -k "$probe_kill_after" "$probe_timeout" \
+             id -g "$probe_user")
+        then
+            echo "cclsh install: could not resolve the probe account" >&2
+            exit 1
+        fi
     fi
     existing_directory=$install_directory
     while [ ! -e "$existing_directory" ] && [ ! -L "$existing_directory" ]; do
@@ -117,10 +139,10 @@ if [ ! -s "$kernel_artifact" ] || [ ! -s "$image_artifact" ]; then
     exit 1
 fi
 
-if [ -n "$login_user" ]; then
+if [ "$system_shell" -eq 1 ]; then
     build_attestation=${CCLSH_BUILD_ATTESTATION:-cclsh.attestation}
     if [ ! -f "$build_attestation" ] || [ -L "$build_attestation" ]; then
-        echo "cclsh install: login build attestation is not a regular file" >&2
+        echo "cclsh install: system build attestation is not a regular file" >&2
         exit 1
     fi
 fi
@@ -131,9 +153,13 @@ if [ -e "$install_directory" ] || [ -L "$install_directory" ]; then
         exit 1
     fi
 else
-    install -d -m 755 -- "$install_directory"
+    if [ "$system_shell" -eq 1 ]; then
+        install -d -o 0 -g 0 -m 755 -- "$install_directory"
+    else
+        install -d -m 755 -- "$install_directory"
+    fi
 fi
-if [ -n "$login_user" ]; then
+if [ "$system_shell" -eq 1 ]; then
     root_directory_chain_check "$install_directory"
 fi
 lock_file="$install_directory/.cclsh-install.lock"
@@ -145,12 +171,15 @@ if [ -e "$lock_file" ] || [ -L "$lock_file" ]; then
 else
     (umask 077; : >"$lock_file")
 fi
-if [ -n "$login_user" ] &&
+if [ "$system_shell" -eq 1 ] &&
    { [ "$(stat -c %u "$lock_file")" -ne 0 ] ||
      [ -n "$(find "$lock_file" -prune -perm /022 -print -quit)" ]; }
 then
     echo "cclsh install: install lock has unsafe metadata" >&2
     exit 1
+fi
+if [ "$system_shell" -eq 1 ]; then
+    chown 0:0 "$lock_file"
 fi
 chmod 600 "$lock_file"
 exec 8<>"$lock_file"
@@ -160,78 +189,13 @@ if ! flock -w "$lock_timeout" 8; then
 fi
 
 stable_shell="$install_directory/cclsh"
-if ! passwd_entries=$(timeout -k "$probe_kill_after" "$probe_timeout" \
-     getent passwd)
-then
-    echo "cclsh install: could not enumerate passwd accounts" >&2
-    exit 1
-fi
-if [ -n "$login_user" ]; then
-    if ! printf '%s\n' "$passwd_entries" | awk -F: \
-         -v gid="$probe_gid" -v user="$login_user" '
-             $4 == gid {
-                 count++
-                 if ($1 != user) bad = 1
-             }
-             END { exit ! (count == 1 && ! bad) }
-         '
+if [ "$system_shell" -eq 0 ]; then
+    if ! passwd_entries=$(timeout -k "$probe_kill_after" "$probe_timeout" \
+         getent passwd)
     then
-        echo \
-            "cclsh install: login user must have a private primary group" \
-            >&2
+        echo "cclsh install: could not enumerate passwd accounts" >&2
         exit 1
     fi
-    if ! group_entry=$(timeout -k "$probe_kill_after" "$probe_timeout" \
-         getent group "$probe_gid")
-    then
-        echo "cclsh install: could not inspect login user's primary group" >&2
-        exit 1
-    fi
-    if ! printf '%s\n' "$group_entry" | awk -F: -v user="$login_user" '
-         {
-             found = 1
-             count = split($4, members, ",")
-             for (member_index = 1; member_index <= count; member_index++) {
-                 if (members[member_index] != "" &&
-                     members[member_index] != user) exit 1
-             }
-         }
-         END { if (! found) exit 1 }
-         '
-    then
-        echo \
-            "cclsh install: login user's primary group has other members" \
-            >&2
-        exit 1
-    fi
-    if printf '%s\n' "$passwd_entries" | awk -F: \
-         -v shell="$stable_shell" -v uid="$probe_uid" '
-             $7 == shell && $3 != uid { found = 1 }
-             END { exit ! found }
-         '
-    then
-        echo \
-            "cclsh install: stable shell is already used by another account" \
-            >&2
-        exit 1
-    fi
-    if [ -e "$stable_shell" ]; then
-        current_kernel=$(realpath -e -- "$stable_shell")
-        current_login_policy=$current_kernel.login-uid
-        if [ -e "$current_login_policy" ]; then
-            if [ ! -f "$current_login_policy" ] ||
-               [ -L "$current_login_policy" ] ||
-               ! IFS= read -r current_login_uid <"$current_login_policy" ||
-               [ "$current_login_uid" != "$probe_uid" ]
-            then
-                echo \
-                    "cclsh install: stable shell belongs to another login user" \
-                    >&2
-                exit 1
-            fi
-        fi
-    fi
-else
     registered=0
     if [ -f "$shells_file" ] && grep -Fqx -- "$stable_shell" "$shells_file"; then
         registered=1
@@ -245,15 +209,19 @@ else
     fi
     if [ "$registered" -eq 1 ]; then
         echo \
-            "cclsh install: refusing owner-only update of a login shell; set CCLSH_LOGIN_USER" \
+            "cclsh install: refusing owner-only update of a system shell; use install-system-shell" \
             >&2
         exit 1
     fi
     if [ -e "$stable_shell" ]; then
         current_kernel=$(realpath -e -- "$stable_shell")
-        if [ -e "$current_kernel.login-uid" ]; then
+        if [ -e "$current_kernel.login-uid" ] ||
+           [ -L "$current_kernel.login-uid" ] ||
+           [ -e "$current_kernel.attestation" ] ||
+           [ -L "$current_kernel.attestation" ]
+        then
             echo \
-                "cclsh install: refusing owner-only update of a login-managed shell" \
+                "cclsh install: refusing owner-only update of a system-managed shell" \
                 >&2
             exit 1
         fi
@@ -291,6 +259,11 @@ restore_path()
                 image_restore_link=$restore_link
             fi
             if ! ln -s "$restore_target" "$restore_link"; then
+                return 1
+            fi
+            if [ "$system_shell" -eq 1 ] &&
+               ! chown -h 0:0 "$restore_link"
+            then
                 return 1
             fi
             if ! mv -Tf -- "$restore_link" "$restore_path_name"; then
@@ -429,26 +402,26 @@ probe()
     )
 }
 
-install -m 755 "$kernel_artifact" "$staging/cclsh"
-if [ -n "$login_user" ]; then
-    install -m 640 "$image_artifact" "$staging/cclsh.image"
-    chgrp "$probe_gid" "$staging/cclsh.image"
-    install -m 600 "$build_attestation" "$staging/cclsh.attestation"
-    printf '%s\n' "$probe_uid" >"$staging/cclsh.login-uid"
-    chmod 600 "$staging/cclsh.login-uid"
+if [ "$system_shell" -eq 1 ]; then
+    chown 0:0 "$staging"
+    install -o 0 -g 0 -m 755 "$kernel_artifact" "$staging/cclsh"
+    install -o 0 -g 0 -m 644 "$image_artifact" "$staging/cclsh.image"
+    install -o 0 -g 0 -m 600 \
+        "$build_attestation" "$staging/cclsh.attestation"
 else
+    install -m 755 "$kernel_artifact" "$staging/cclsh"
     install -m 600 "$image_artifact" "$staging/cclsh.image"
 fi
 cmp -s "$kernel_artifact" "$staging/cclsh"
 cmp -s "$image_artifact" "$staging/cclsh.image"
-if [ -n "$login_user" ]; then
+if [ "$system_shell" -eq 1 ]; then
     cmp -s "$build_attestation" "$staging/cclsh.attestation"
     scripts/verify-attestation \
         "$staging/cclsh" "$staging/cclsh.image" \
         "$staging/cclsh.attestation"
 fi
 
-if [ -z "$login_user" ]; then
+if [ "$system_shell" -eq 0 ]; then
     probe_home="$staging/home"
     mkdir -m 700 "$probe_home"
     probe "$staging/cclsh" "" --version >/dev/null
@@ -458,8 +431,8 @@ if [ -z "$login_user" ]; then
 fi
 
 install_uid=$(id -u)
-if [ -n "$login_user" ]; then
-    release_policy="login:$probe_uid:$probe_gid"
+if [ "$system_shell" -eq 1 ]; then
+    release_policy=system-v1
 else
     release_policy="owner:$install_uid"
 fi
@@ -469,21 +442,18 @@ fi
 if ! staged_image_hash=$(scripts/file-sha256 "$staging/cclsh.image"); then
     exit 1
 fi
-if [ -n "$login_user" ]; then
+if [ "$system_shell" -eq 1 ]; then
     if ! staged_attestation_hash=$(
         scripts/file-sha256 "$staging/cclsh.attestation"
     ); then
-        exit 1
-    fi
-    if ! staged_uid_hash=$(scripts/file-sha256 "$staging/cclsh.login-uid"); then
         exit 1
     fi
 fi
 if ! release_hash=$(
     {
         printf '%s\n' "$staged_kernel_hash" "$staged_image_hash"
-        if [ -n "$login_user" ]; then
-            printf '%s\n' "$staged_attestation_hash" "$staged_uid_hash"
+        if [ "$system_shell" -eq 1 ]; then
+            printf '%s\n' "$staged_attestation_hash"
         fi
         printf '%s\n' "$release_policy"
     } | sha256sum
@@ -514,7 +484,11 @@ if [ -e "$releases_directory" ] || [ -L "$releases_directory" ]; then
         exit 1
     fi
 else
-    install -d -m 755 "$releases_directory"
+    if [ "$system_shell" -eq 1 ]; then
+        install -d -o 0 -g 0 -m 755 "$releases_directory"
+    else
+        install -d -m 755 "$releases_directory"
+    fi
 fi
 if [ -d "$release_directory" ]; then
     if [ -L "$release_directory" ] ||
@@ -533,24 +507,23 @@ if [ -d "$release_directory" ]; then
         echo "cclsh install: existing release is damaged: $release_directory" >&2
         exit 1
     fi
-    if [ -n "$login_user" ]; then
-        if [ "$(stat -c %a "$release_directory/cclsh.image")" != 640 ] ||
-           [ "$(stat -c %g "$release_directory/cclsh.image")" -ne "$probe_gid" ] ||
+    if [ "$system_shell" -eq 1 ]; then
+        if [ "$(stat -c %g "$release_directory")" -ne 0 ] ||
+           [ "$(stat -c %g "$release_directory/cclsh")" -ne 0 ] ||
+           [ "$(stat -c %a "$release_directory/cclsh.image")" != 644 ] ||
+           [ "$(stat -c %g "$release_directory/cclsh.image")" -ne 0 ] ||
            [ ! -f "$release_directory/cclsh.attestation" ] ||
            [ -L "$release_directory/cclsh.attestation" ] ||
-           [ ! -f "$release_directory/cclsh.login-uid" ] ||
-           [ -L "$release_directory/cclsh.login-uid" ] ||
            [ "$(stat -c %u "$release_directory/cclsh.attestation")" -ne "$install_uid" ] ||
+           [ "$(stat -c %g "$release_directory/cclsh.attestation")" -ne 0 ] ||
            [ "$(stat -c %a "$release_directory/cclsh.attestation")" != 600 ] ||
-           [ "$(stat -c %u "$release_directory/cclsh.login-uid")" -ne "$install_uid" ] ||
-           [ "$(stat -c %a "$release_directory/cclsh.login-uid")" != 600 ] ||
+           [ -e "$release_directory/cclsh.login-uid" ] ||
+           [ -L "$release_directory/cclsh.login-uid" ] ||
            ! cmp -s "$staging/cclsh.attestation" \
-                    "$release_directory/cclsh.attestation" ||
-           ! cmp -s "$staging/cclsh.login-uid" \
-                    "$release_directory/cclsh.login-uid"
+                    "$release_directory/cclsh.attestation"
         then
             echo \
-                "cclsh install: existing login release has unsafe metadata" \
+                "cclsh install: existing system release has unsafe metadata" \
                 >&2
             exit 1
         fi
@@ -570,19 +543,20 @@ fi
 staging=
 sync -f "$release_directory/cclsh"
 sync -f "$release_directory/cclsh.image"
-if [ -n "$login_user" ]; then
+if [ "$system_shell" -eq 1 ]; then
     sync -f "$release_directory/cclsh.attestation"
-    sync -f "$release_directory/cclsh.login-uid"
 fi
 sync -f "$release_directory"
 sync -f "$releases_directory"
 
-if [ -n "$login_user" ]; then
+if [ "$system_shell" -eq 1 ]; then
     probe_home=$(mktemp -d "$install_directory/.cclsh-probe.XXXXXX")
     chmod 700 "$probe_home"
-    chown "$probe_uid:$probe_gid" "$probe_home"
-    probe "$release_directory/cclsh" "$login_user" --version >/dev/null
-    probe "$release_directory/cclsh" "$login_user" -c 'exit 0'
+    if [ -n "$probe_user" ]; then
+        chown "$probe_uid:$probe_gid" "$probe_home"
+    fi
+    probe "$release_directory/cclsh" "$probe_user" --version >/dev/null
+    probe "$release_directory/cclsh" "$probe_user" -c 'exit 0'
     rm -rf -- "$probe_home"
     probe_home=
 fi
@@ -619,18 +593,33 @@ trap '' 1 2 15
 activation_started=1
 temporary_link="$transaction_directory/kernel-link"
 ln -s ".cclsh-releases/$release_id/cclsh" "$temporary_link"
+if [ "$system_shell" -eq 1 ]; then
+    chown -h 0:0 "$temporary_link"
+fi
 mv -Tf -- "$temporary_link" "$install_directory/cclsh"
 temporary_link=
 temporary_link="$transaction_directory/image-link"
 ln -s ".cclsh-releases/$release_id/cclsh.image" "$temporary_link"
+if [ "$system_shell" -eq 1 ]; then
+    chown -h 0:0 "$temporary_link"
+fi
 mv -Tf -- "$temporary_link" "$install_directory/cclsh.image"
 temporary_link=
 sync -f "$install_directory"
 
-if [ -n "$login_user" ]; then
-    if ! scripts/register-shell \
-        "$install_directory/cclsh" "$shells_file" "$login_user"
-    then
+if [ "$system_shell" -eq 1 ]; then
+    if [ -n "$probe_user" ]; then
+        registration_status=0
+        scripts/register-shell \
+            "$install_directory/cclsh" "$shells_file" "$probe_user" ||
+            registration_status=$?
+    else
+        registration_status=0
+        CCLSH_PROBE_USER= scripts/register-shell \
+            "$install_directory/cclsh" "$shells_file" ||
+            registration_status=$?
+    fi
+    if [ "$registration_status" -ne 0 ]; then
         echo "cclsh install: registration failed; restoring previous release" >&2
         exit 1
     fi

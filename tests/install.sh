@@ -11,7 +11,6 @@ else
     )
 fi
 lock_holder=
-login_temporary_directory=
 cleanup()
 {
     if [ -n "$lock_holder" ]; then
@@ -19,9 +18,6 @@ cleanup()
         wait "$lock_holder" 2>/dev/null || true
     fi
     rm -rf -- "$temporary_directory"
-    if [ -n "$login_temporary_directory" ]; then
-        rm -rf -- "$login_temporary_directory"
-    fi
 }
 trap cleanup 0
 trap 'exit 129' 1
@@ -144,51 +140,6 @@ do
     fi
 done
 
-prebuilt_refusal=$temporary_directory/prebuilt-refusal
-set +e
-CCLSH_CCL=$temporary_directory/missing-ccl \
-CCLSH_LOGIN_USER=unused-login-user \
-CCLSH_INSTALL_DIRECTORY="$prebuilt_refusal" \
-    scripts/install >$temporary_directory/prebuilt.stdout \
-                    2>$temporary_directory/prebuilt.stderr
-prebuilt_status=$?
-set -e
-if [ "$prebuilt_status" -ne 2 ] ||
-   ! grep -Fqx \
-       'cclsh install: login installation requires prebuilt attested artifacts; set CCLSH_SKIP_BUILD=1' \
-       "$temporary_directory/prebuilt.stderr" ||
-   [ -e "$prebuilt_refusal" ] || [ -L "$prebuilt_refusal" ]
-then
-    echo "login install did not refuse an implicit privileged build" >&2
-    exit 1
-fi
-
-if [ "$(id -u)" -eq 0 ]; then
-    chmod 755 "$temporary_directory"
-    root_install_directory=$temporary_directory/root-login-bin
-    root_shell=$root_install_directory/cclsh
-    CCLSH_SKIP_BUILD=1 \
-    CCLSH_KERNEL_ARTIFACT="$source_shell" \
-    CCLSH_IMAGE_ARTIFACT="$source_image" \
-    CCLSH_INSTALL_DIRECTORY="$root_install_directory" \
-    CCLSH_LOGIN_USER=root \
-    CCLSH_SHELLS_FILE="$shells_file" \
-    CCLSH_BUILD_ATTESTATION="$attestation" \
-        scripts/install >/dev/null
-    root_release=$(realpath -e -- "$root_shell")
-    if [ ! -L "$root_shell" ] || [ ! -L "$root_shell.image" ] ||
-       [ "$(stat -c '%a:%u:%g' "$root_release")" != 755:0:0 ] ||
-       [ "$(stat -c '%a:%u:%g' "$root_release.image")" != 640:0:0 ] ||
-       [ "$(stat -c '%a:%u:%g' "$root_release.attestation")" != 600:0:0 ] ||
-       [ "$(stat -c '%a:%u:%g' "$root_release.login-uid")" != 600:0:0 ] ||
-       [ "$(cat "$root_release.login-uid")" != 0 ] ||
-       [ "$(grep -Fxc -- "$root_shell" "$shells_file")" -ne 1 ]
-    then
-        echo "root login install published incorrect release metadata" >&2
-        exit 1
-    fi
-fi
-
 CCLSH_SKIP_BUILD=1 \
 CCLSH_KERNEL_ARTIFACT="$source_shell" \
 CCLSH_IMAGE_ARTIFACT="$source_image" \
@@ -298,247 +249,24 @@ if [ "$(realpath "$shell_path")" != "$second_release" ]; then
     exit 1
 fi
 
-if [ "$(id -u)" -eq 0 ] && id nobody >/dev/null 2>&1; then
-    login_temporary_directory=$(mktemp -d /run/cclsh-install-check.XXXXXX)
-    chmod 755 "$login_temporary_directory"
-    login_install_directory=$login_temporary_directory/bin
-    login_shell=$login_install_directory/cclsh
-    install -d -m 755 "$login_install_directory"
-    chmod 755 "$temporary_directory"
+
+resolved_image=$second_release.image
+chmod 644 "$resolved_image"
+if [ "$(id -u)" -eq 0 ]; then
+    chmod 755 "$temporary_directory" "$install_directory"
+    chmod 750 "$install_directory"
+    if scripts/register-shell "$shell_path" "$shells_file" \
+         >/dev/null 2>&1
+    then
+        echo "register-shell accepted a path hidden from login users" >&2
+        exit 1
+    fi
     chmod 755 "$install_directory"
-    nobody_uid=$(id -u nobody)
-    cat >"$source_shell" <<EOF
-#!/bin/sh
-if test "\$(id -u)" = "$nobody_uid"; then
-    exit 1
-fi
-case "\${1:-}" in
-    --version|-c) exit 0 ;;
-    *) exit 2 ;;
-esac
-EOF
-    write_test_attestation "$source_shell" "$source_image"
-    scripts/verify-attestation "$source_shell" "$source_image" \
-        "$attestation"
-    CCLSH_SKIP_BUILD=1 \
-    CCLSH_KERNEL_ARTIFACT="$source_shell" \
-    CCLSH_IMAGE_ARTIFACT="$source_image" \
-    CCLSH_INSTALL_DIRECTORY="$login_install_directory" \
-    scripts/install >/dev/null
-    unsafe_directory=$login_temporary_directory/unsafe-login-bin
-    install -d -m 755 "$unsafe_directory"
-    chown "$nobody_uid:$(id -g nobody)" "$unsafe_directory"
-    if CCLSH_SKIP_BUILD=1 \
-       CCLSH_KERNEL_ARTIFACT="$source_shell" \
-       CCLSH_IMAGE_ARTIFACT="$source_image" \
-       CCLSH_INSTALL_DIRECTORY="$unsafe_directory" \
-       CCLSH_LOGIN_USER=nobody \
-       CCLSH_SHELLS_FILE="$shells_file" \
-       CCLSH_BUILD_ATTESTATION="$attestation" \
-       scripts/install >/dev/null 2>&1
-    then
-        echo "login install accepted an untrusted destination" >&2
-        exit 1
-    fi
-    if find "$unsafe_directory" -mindepth 1 -print -quit | grep -q .; then
-        echo "rejected login destination was modified" >&2
-        exit 1
-    fi
-    before_target_failure=$(realpath "$login_shell")
-    if CCLSH_SKIP_BUILD=1 \
-       CCLSH_KERNEL_ARTIFACT="$source_shell" \
-       CCLSH_IMAGE_ARTIFACT="$source_image" \
-       CCLSH_INSTALL_DIRECTORY="$login_install_directory" \
-       CCLSH_LOGIN_USER=nobody \
-       CCLSH_SHELLS_FILE="$shells_file" \
-       CCLSH_BUILD_ATTESTATION="$attestation" \
-       scripts/install >/dev/null 2>&1
-    then
-        echo "install accepted a failed target-user probe" >&2
-        exit 1
-    fi
-    if [ "$(realpath "$login_shell")" != "$before_target_failure" ]; then
-        echo "target-user probe failure changed the active release" >&2
-        exit 1
-    fi
-
-    cat >"$source_shell" <<'EOF'
-#!/bin/sh
-case "${1:-}" in
-    --version|-c) exit 0 ;;
-    *) exit 2 ;;
-esac
-EOF
-    write_test_attestation "$source_shell" "$source_image"
-    scripts/verify-attestation "$source_shell" "$source_image" \
-        "$attestation"
-    before_registration_failure=$(realpath "$login_shell")
-    if CCLSH_SKIP_BUILD=1 \
-       CCLSH_KERNEL_ARTIFACT="$source_shell" \
-       CCLSH_IMAGE_ARTIFACT="$source_image" \
-       CCLSH_INSTALL_DIRECTORY="$login_install_directory" \
-       CCLSH_LOGIN_USER=nobody \
-       CCLSH_SHELLS_FILE="$temporary_directory/./shells" \
-       CCLSH_BUILD_ATTESTATION="$attestation" \
-       scripts/install >/dev/null 2>&1
-    then
-        echo "install accepted a failed shell registration" >&2
-        exit 1
-    fi
-    if [ "$(realpath "$login_shell")" != "$before_registration_failure" ]; then
-        echo "registration failure did not restore the active release" >&2
-        exit 1
-    fi
-
-    rollback_directory=$login_temporary_directory/rollback-bin
-    rollback_shell=$rollback_directory/cclsh
-    rollback_image=$rollback_directory/cclsh.image
-    rollback_shell_copy=$temporary_directory/rollback-cclsh.expected
-    rollback_image_copy=$temporary_directory/rollback-image.expected
-    rollback_shells=$temporary_directory/rollback-shells
-    install -d -m 755 "$rollback_directory"
-    printf '%s\n' '#!/bin/sh' 'exit 71' >"$rollback_shell"
-    printf '%s\n' 'previous regular image' >"$rollback_image"
-    chmod 755 "$rollback_shell"
-    chmod 640 "$rollback_image"
-    cp "$rollback_shell" "$rollback_shell_copy"
-    cp "$rollback_image" "$rollback_image_copy"
-    printf '%s\n' /bin/sh >"$rollback_shells"
-    chmod 640 "$rollback_shells"
-    if CCLSH_SKIP_BUILD=1 \
-       CCLSH_KERNEL_ARTIFACT="$source_shell" \
-       CCLSH_IMAGE_ARTIFACT="$source_image" \
-       CCLSH_INSTALL_DIRECTORY="$rollback_directory" \
-       CCLSH_LOGIN_USER=nobody \
-       CCLSH_SHELLS_FILE="$temporary_directory/./rollback-shells" \
-       CCLSH_BUILD_ATTESTATION="$attestation" \
-       scripts/install >/dev/null 2>&1
-    then
-        echo "regular-file rollback test unexpectedly registered" >&2
-        exit 1
-    fi
-    if [ -L "$rollback_shell" ] || [ -L "$rollback_image" ] ||
-       ! cmp -s "$rollback_shell_copy" "$rollback_shell" ||
-       ! cmp -s "$rollback_image_copy" "$rollback_image" ||
-       find "$rollback_directory" -maxdepth 1 \
-           -name '.cclsh-rollback-*' -print -quit | grep -q .
-    then
-        echo "registration failure did not restore regular files" >&2
-        exit 1
-    fi
-
-    private_source=$temporary_directory/private-source-cclsh
-    private_image=$temporary_directory/private-source-cclsh.image
-    private_directory=$login_temporary_directory/private-bin
-    private_shell=$private_directory/cclsh
-    private_shells=$temporary_directory/private-shells
-    private_failure=$temporary_directory/private-probe-failure
-    cat >"$private_source" <<EOF
-#!/bin/sh
-if test "\$(id -u)" = "$nobody_uid" && test -e "$private_failure"; then
-    exit 1
-fi
-case "\${1:-}" in
-    --version|-c) exit 0 ;;
-    *) exit 2 ;;
-esac
-EOF
-    printf '%s\n' 'private image' >"$private_image"
-    printf '%s\n' '/bin/sh' >"$private_shells"
-    chmod 755 "$private_source"
-    chmod 644 "$private_image"
-    chmod 640 "$private_shells"
-    install -d -m 755 "$private_directory"
-
-    write_test_attestation "$private_source" "$private_image"
-    printf '%s\n' tampered >>"$attestation"
-    if CCLSH_SKIP_BUILD=1 \
-       CCLSH_KERNEL_ARTIFACT="$private_source" \
-       CCLSH_IMAGE_ARTIFACT="$private_image" \
-       CCLSH_INSTALL_DIRECTORY="$private_directory" \
-       CCLSH_LOGIN_USER=nobody \
-       CCLSH_SHELLS_FILE="$private_shells" \
-       CCLSH_BUILD_ATTESTATION="$attestation" \
-       scripts/install >/dev/null 2>&1
-    then
-        echo "install accepted a stale build attestation" >&2
-        exit 1
-    fi
-    if [ -e "$private_shell" ] || [ -L "$private_shell" ]; then
-        echo "invalid attestation activated a shell" >&2
-        exit 1
-    fi
-
-    write_test_attestation "$private_source" "$private_image"
-    CCLSH_SKIP_BUILD=1 \
-    CCLSH_KERNEL_ARTIFACT="$private_source" \
-    CCLSH_IMAGE_ARTIFACT="$private_image" \
-    CCLSH_INSTALL_DIRECTORY="$private_directory" \
-    CCLSH_LOGIN_USER=nobody \
-    CCLSH_SHELLS_FILE="$private_shells" \
-    CCLSH_BUILD_ATTESTATION="$attestation" \
-    scripts/install >/dev/null
-    private_release=$(realpath "$private_shell")
-    private_metadata=$(
-        stat -c '%a:%u:%g:%n' \
-            "$(dirname "$private_release")" \
-            "$private_release" \
-            "$private_release.image" \
-            "$private_release.attestation" \
-            "$private_release.login-uid"
-    )
-    : >"$private_failure"
-    if CCLSH_SKIP_BUILD=1 \
-       CCLSH_KERNEL_ARTIFACT="$private_source" \
-       CCLSH_IMAGE_ARTIFACT="$private_image" \
-       CCLSH_INSTALL_DIRECTORY="$private_directory" \
-       CCLSH_LOGIN_USER=nobody \
-       CCLSH_SHELLS_FILE="$private_shells" \
-       CCLSH_BUILD_ATTESTATION="$attestation" \
-       scripts/install >/dev/null 2>&1
-    then
-        echo "install accepted a failed reused-release probe" >&2
-        exit 1
-    fi
-    if [ "$(realpath "$private_shell")" != "$private_release" ] ||
-       [ "$(
-           stat -c '%a:%u:%g:%n' \
-               "$(dirname "$private_release")" \
-               "$private_release" \
-               "$private_release.image" \
-               "$private_release.attestation" \
-               "$private_release.login-uid"
-         )" != "$private_metadata" ]
-    then
-        echo "failed reused release changed active metadata" >&2
-        exit 1
-    fi
-
-    if CCLSH_SKIP_BUILD=1 \
-       CCLSH_KERNEL_ARTIFACT="$private_source" \
-       CCLSH_IMAGE_ARTIFACT="$private_image" \
-       CCLSH_INSTALL_DIRECTORY="$private_directory" \
-       CCLSH_SHELLS_FILE="$private_shells" \
-       scripts/install >/dev/null 2>&1
-    then
-        echo "owner-only install replaced a registered login shell" >&2
-        exit 1
-    fi
-    if CCLSH_SKIP_BUILD=1 \
-       CCLSH_KERNEL_ARTIFACT="$private_source" \
-       CCLSH_IMAGE_ARTIFACT="$private_image" \
-       CCLSH_INSTALL_DIRECTORY="$private_directory/../private-bin" \
-       scripts/install >/dev/null 2>&1
-    then
-        echo "install accepted a noncanonical destination" >&2
-        exit 1
-    fi
 fi
 
 scripts/register-shell "$shell_path" "$shells_file" >/dev/null
 scripts/register-shell "$shell_path" "$shells_file" >/dev/null
 if [ "$(id -u)" -eq 0 ] && id nobody >/dev/null 2>&1; then
-    chmod 644 "$second_release.image"
     scripts/register-shell "$shell_path" "$shells_file" nobody >/dev/null
 fi
 
@@ -604,15 +332,11 @@ if [ "$(id -u)" -eq 0 ]; then
     scripts/register-shell "$shell_path" "$shells_file" root >/dev/null
 fi
 
-resolved_image=$second_release.image
-if [ "$(id -u)" -eq 0 ] && id nobody >/dev/null 2>&1; then
-    chmod 640 "$resolved_image"
-    if scripts/register-shell "$shell_path" "$shells_file" nobody \
-         >/dev/null 2>&1
-    then
-        echo "register-shell accepted an image unreadable by the probe user" >&2
-        exit 1
-    fi
+chmod 640 "$resolved_image"
+if scripts/register-shell "$shell_path" "$shells_file" >/dev/null 2>&1
+then
+    echo "register-shell accepted an image unreadable by login users" >&2
+    exit 1
 fi
 chmod 644 "$resolved_image"
 
