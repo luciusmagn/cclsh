@@ -104,7 +104,8 @@ script arguments, installation and attestation behavior.
   [[https://github.com/luciusmagn/ccl/commit/a293f4460fadc5da420eec0739e61622e847aed2][=a293f4460fadc5da420eec0739e61622e847aed2=]]
 - Downstream base:
   [[https://github.com/Clozure/ccl/commit/c994217adc56b3f8a564526cee4695893ac84d86][=c994217adc56b3f8a564526cee4695893ac84d86=]]
-- Prepared upstream topic branch: =fix/linux-x86-64-xstate=
+- Prepared upstream topic branch:
+  [[https://github.com/luciusmagn/ccl/tree/lho/fix/linux-x86-64-xstate][=lho/fix/linux-x86-64-xstate=]]
 - Prepared upstream commit:
   [[https://github.com/luciusmagn/ccl/commit/1c6f0cca158098546d762aeaa646822650b53cf7][=1c6f0cca158098546d762aeaa646822650b53cf7=]]
 - Prepared upstream base:
