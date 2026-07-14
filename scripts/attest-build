@@ -67,35 +67,8 @@ if [ ! -f "$resolved_image" ] || ! cmp -s cclsh.image "$resolved_image"; then
     echo "cclsh attestation: active image is not adjacent to its kernel" >&2
     exit 1
 fi
-probe_timeout=${CCLSH_BUILD_VALIDATION_TIMEOUT:-30}
-case "$probe_timeout" in
-    ''|*[!0-9]*)
-        echo "cclsh attestation: probe timeout must be positive seconds" >&2
-        exit 2
-        ;;
-esac
-case "$probe_timeout" in
-    *[1-9]*) ;;
-    *)
-        echo "cclsh attestation: probe timeout must be positive seconds" >&2
-        exit 2
-        ;;
-esac
-if [ ! -x /usr/bin/timeout ]; then
-    echo "cclsh attestation: /usr/bin/timeout is required" >&2
-    exit 1
-fi
-set +e
-argument_probe=$(
-    CCLSH_SAFE=1 /usr/bin/timeout --signal=TERM --kill-after=1 \
-        "$probe_timeout" "$resolved_kernel" -c --no-avx 2>&1
-)
-argument_status=$?
-set -e
-if [ "$argument_status" -ne 127 ] ||
-   ! printf '%s\n' "$argument_probe" | grep -Fq -- '--no-avx'
-then
-    echo "cclsh attestation: CCL kernel consumed a cclsh command operand" >&2
+if ! scripts/verify-argument-boundary "$resolved_kernel" "$resolved_image"; then
+    echo "cclsh attestation: kernel failed its argument check" >&2
     exit 1
 fi
 for patch in "$@"; do

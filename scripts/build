@@ -150,26 +150,10 @@ then
     echo "cclsh build: staged saved-image validation failed" >&2
     exit 1
 fi
-ln -s "$build_root/cclsh.new" "$validation_home/cclsh"
-set +e
-argument_probe=$(
-    HOME="$validation_home" \
-    CCLSH_SAFE=1 \
-    LANG=C \
-    LC_ALL=C \
-    /usr/bin/timeout --signal=TERM --kill-after=1 \
-    "$validation_timeout" \
-    "$validation_home/cclsh" -I "$build_root/cclsh.image.new" \
-    -c --no-avx 2>&1
-)
-argument_status=$?
-set -e
-if [ "$argument_status" -ne 127 ] ||
-   ! printf '%s\n' "$argument_probe" | grep -Fq -- '--no-avx'
+if ! scripts/verify-argument-boundary \
+     "$build_root/cclsh.new" "$build_root/cclsh.image.new"
 then
-    echo \
-        "cclsh build: CCL kernel does not preserve cclsh arguments" \
-        >&2
+    echo "cclsh build: staged kernel failed its argument check" >&2
     exit 1
 fi
 if ! kernel_hash=$(scripts/file-sha256 cclsh.new); then

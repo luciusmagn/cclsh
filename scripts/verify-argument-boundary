@@ -1,0 +1,70 @@
+#!/bin/sh
+# Require a kernel named cclsh to leave its command operand for Lisp.
+set -eu
+cd "$(dirname "$0")/.."
+
+if [ "$#" -ne 2 ]; then
+    echo "usage: scripts/verify-argument-boundary KERNEL IMAGE" >&2
+    exit 2
+fi
+kernel=$(realpath -e -- "$1")
+image=$(realpath -e -- "$2")
+if [ ! -f "$kernel" ] || [ -L "$kernel" ] || [ ! -x "$kernel" ]; then
+    echo "cclsh argument check: kernel is not a regular executable" >&2
+    exit 1
+fi
+if [ ! -f "$image" ] || [ -L "$image" ] || [ ! -r "$image" ]; then
+    echo "cclsh argument check: image is not a readable regular file" >&2
+    exit 1
+fi
+probe_timeout=${CCLSH_BUILD_VALIDATION_TIMEOUT:-30}
+case "$probe_timeout" in
+    ''|*[!0-9]*)
+        echo "cclsh argument check: timeout must be positive seconds" >&2
+        exit 2
+        ;;
+esac
+case "$probe_timeout" in
+    *[1-9]*) ;;
+    *)
+        echo "cclsh argument check: timeout must be positive seconds" >&2
+        exit 2
+        ;;
+esac
+if [ ! -x /usr/bin/timeout ]; then
+    echo "cclsh argument check: /usr/bin/timeout is required" >&2
+    exit 1
+fi
+
+probe_home=$(mktemp -d "${TMPDIR:-/tmp}/cclsh-argument-check.XXXXXX")
+cleanup()
+{
+    rm -rf -- "$probe_home"
+}
+trap cleanup 0
+trap 'exit 129' 1
+trap 'exit 130' 2
+trap 'exit 143' 15
+ln -s "$kernel" "$probe_home/cclsh"
+
+set +e
+argument_probe=$(
+    env -i \
+        HOME="$probe_home" \
+        XDG_CONFIG_HOME="$probe_home/.config" \
+        PATH=/usr/local/bin:/usr/bin:/bin \
+        CCLSH_SAFE=1 \
+        LANG=C \
+        LC_ALL=C \
+        /usr/bin/timeout --signal=TERM --kill-after=1 \
+            "$probe_timeout" "$probe_home/cclsh" \
+            -I "$image" -c --no-avx 2>&1
+)
+argument_status=$?
+set -e
+if [ "$argument_status" -ne 127 ] ||
+   ! printf '%s\n' "$argument_probe" | grep -Fq -- '--no-avx'
+then
+    echo "cclsh argument check: kernel consumed a cclsh command operand" >&2
+    exit 1
+fi
