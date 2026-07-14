@@ -338,7 +338,8 @@ rebuilds CCL 1.13 from the exact downstream CCL commits and Clinedi revision
 in dependencies.lock, and includes pinned Quicklisp metadata. nix flake check
 builds and tests the installed result.
 
-The package uses an existing ~/quicklisp or initializes a writable tree below
+Every saved image uses an existing ~/quicklisp or initializes an embedded,
+sanitized client and distribution index in a writable tree below
 ${XDG_DATA_HOME:-$HOME/.local/share}/cclsh/quicklisp. Override it with
 CCLSH_QUICKLISP_HOME. Existing overrides must contain setup.lisp; invalid or
 unwritable targets are reported and refused. Interactive and configured

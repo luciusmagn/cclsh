@@ -27,8 +27,8 @@ exact downstream CCL commits and Clinedi revision in =dependencies.lock=. Run
 =nix flake check= to build the package and test its installed command boundary
 and Quicklisp state.
 
-The Nix package uses an existing =~/quicklisp= when available. Otherwise its
-first shell or command session copies the pinned client and distribution index
+Every saved image uses an existing =~/quicklisp= when available. Otherwise its
+first shell or command session copies an embedded client and distribution index
 to =${XDG_DATA_HOME:-$HOME/.local/share}/cclsh/quicklisp=. Set
 =CCLSH_QUICKLISP_HOME= to override that writable location. An existing
 override must contain =setup.lisp=; invalid or unwritable targets are reported
@@ -43,12 +43,13 @@ The supported platform is Linux x86-64. Clone and select the exact Clinedi
 dependency:
 
 #+begin_src sh
-git clone https://github.com/luciusmagn/clinedi.git ~/common-lisp/clinedi
+git clone https://github.com/luciusmagn/clinedi.git ../clinedi
 clinedi_commit=$(sed -n 's/^clinedi=//p' dependencies.lock)
-git -C ~/common-lisp/clinedi checkout --detach "$clinedi_commit"
+git -C ../clinedi checkout --detach "$clinedi_commit"
 #+end_src
 
-Add =~/common-lisp/= to Quicklisp's local directories, for example in
+For interactive Quicklisp use, add =~/common-lisp/= to its local directories
+in
 =~/quicklisp/local-init/common-lisp.lisp=:
 
 #+begin_src lisp
@@ -58,10 +59,12 @@ Add =~/common-lisp/= to Quicklisp's local directories, for example in
          :test #'equal)
 #+end_src
 
-Set =CCLSH_QUICKLISP_SETUP= if Quicklisp is elsewhere. A missing setup file,
-a non-Git, dirty or mismatched Clinedi checkout, or a different copy selected
-by Quicklisp stops the build. Stock CCL remains useful for checks and unsaved
-REPL development:
+Set =CCLSH_QUICKLISP_SETUP= if Quicklisp is elsewhere and
+=CCLSH_CLINEDI_SOURCE= if Clinedi is not at =../clinedi=. The build copies a
+strict Quicklisp metadata allowlist before loading it, so personal local init,
+proxy configuration, caches and downloaded systems do not enter the image. A
+missing setup file or a non-Git, dirty or mismatched Clinedi checkout stops the
+build. Stock CCL remains useful for checks and unsaved REPL development:
 
 #+begin_src sh
 scripts/check
@@ -600,10 +603,11 @@ scripting host:
 =quicklisp-setup= remains useful when running cclsh directly from an
 unsaved CCL development image: it loads an existing =~/quicklisp= or
 installs one with curl. =scripts/build= itself never produces an image
-without Quicklisp. A manually built image retains the pathname of the
-Quicklisp tree used to build it, so keep that tree present and readable. The
-Nix package instead rebases the loaded client to an existing =~/quicklisp= or
-a writable XDG data tree before commands and scripts run.
+without Quicklisp. Both source-built and Nix images rebase the loaded client
+to an existing =~/quicklisp= or a writable XDG data tree before commands and
+scripts run. The embedded template contains only the Quicklisp client and
+distribution metadata, never the builder's local init, configuration, caches
+or downloaded systems.
 
 Scripts run three ways, all skipping =startup.lisp= and history:
 

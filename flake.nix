@@ -199,6 +199,7 @@
           export CCLSH_CCL=${patchedCcl}/share/ccl-installation/lx86cl64
           export CCLSH_CCL_IMAGE=${patchedCcl}/share/ccl-installation/lx86cl64.image
           export CCLSH_BUILD_COMMIT=${lib.escapeShellArg buildCommit}
+          export CCLSH_CLINEDI_SOURCE="$out/share/cclsh/clinedi"
           export CCLSH_QUICKLISP_SETUP="$TMPDIR/quicklisp/setup.lisp"
           export CCLSH_PACKAGED_QUICKLISP_TEMPLATE="$out/share/cclsh/quicklisp"
           export ASDF_OUTPUT_TRANSLATIONS="$PWD/:$TMPDIR/cclsh-fasl/"

@@ -27,11 +27,11 @@ recorded in =dependencies.lock=, and includes a pinned Quicklisp client and
 distribution index. =nix flake check= builds the complete package and checks
 its command boundary and installed Quicklisp state.
 
-A packaged image uses an existing =~/quicklisp= when one is present. Otherwise
-it initializes a writable tree under
+Every saved image uses an existing =~/quicklisp= when one is present. Otherwise
+it initializes an embedded, sanitized client and distribution index under
 =${XDG_DATA_HOME:-$HOME/.local/share}/cclsh/quicklisp= on first use. Set
 =CCLSH_QUICKLISP_HOME= to choose another location. Quicklisp downloads and
-compiled files use that writable tree rather than the read-only Nix store.
+compiled files use that writable tree rather than the saved image or Nix store.
 An explicit target that already exists must contain =setup.lisp=; an invalid
 or unwritable target is reported and refused.
 
@@ -51,15 +51,15 @@ and a C toolchain. Login installation also uses =flock=, =runuser= and
 =getent=. Clone Clinedi and check out the locked revision:
 
 #+begin_src sh
-git clone https://github.com/luciusmagn/clinedi.git ~/common-lisp/clinedi
+git clone https://github.com/luciusmagn/clinedi.git ../clinedi
 clinedi_commit=$(sed -n 's/^clinedi=//p' dependencies.lock)
-git -C ~/common-lisp/clinedi checkout --detach "$clinedi_commit"
+git -C ../clinedi checkout --detach "$clinedi_commit"
 #+end_src
 
 zoxide is optional. Install =fzf= as well when using its interactive =zi=
 command.
 
-Register the checkout's parent with Quicklisp, for example in
+For interactive Quicklisp use, register the checkout's parent in
 =~/quicklisp/local-init/common-lisp.lisp=:
 
 #+begin_src lisp
@@ -70,9 +70,12 @@ Register the checkout's parent with Quicklisp, for example in
 #+end_src
 
 Set =CCLSH_QUICKLISP_SETUP= when =setup.lisp= is not at
-=~/quicklisp/setup.lisp=. Every saved image includes Quicklisp and Clinedi.
-The build refuses a missing Quicklisp setup, a non-Git Clinedi source, a dirty
-checkout, a revision mismatch, or a different copy selected by Quicklisp.
+=~/quicklisp/setup.lisp=. Set =CCLSH_CLINEDI_SOURCE= when the Clinedi checkout
+is not at =../clinedi=. Every saved image includes Quicklisp and Clinedi. The
+build copies a strict Quicklisp metadata allowlist before loading it, so
+personal =local-init=, proxy configuration, caches and downloaded systems do
+not enter the image. It refuses a missing Quicklisp setup, a non-Git Clinedi
+source, a dirty checkout, or a revision mismatch.
 
 Stock CCL is enough for regression checks and unsaved REPL development:
 

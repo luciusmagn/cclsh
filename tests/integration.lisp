@@ -397,7 +397,9 @@ exit 0
   (list (cons "PATH"
               (format nil "~a:/usr/bin:/bin" *integration-bin-directory*))
         (cons "HOME" *integration-directory*)
+        (cons "XDG_CACHE_HOME" *integration-directory*)
         (cons "XDG_CONFIG_HOME" *integration-directory*)
+        (cons "XDG_DATA_HOME" *integration-directory*)
         (cons "CCLSH_SAFE" "1")
         (cons "CCLSH_QUICKLISP_SETUP" "/definitely/missing/setup.lisp")
         (cons "CCLSH_TEST_ROOT"
@@ -809,15 +811,42 @@ exit 0
             "(let* ((package (find-package \"QL\"))
                     (quickload (and package
                                     (find-symbol \"QUICKLOAD\" package)))
-                    (available (and quickload (fboundp quickload) t)))
+                    (available (and quickload (fboundp quickload) t))
+                    (home (and (find-package \"QL-SETUP\")
+                               ql-setup:*quicklisp-home*))
+                    (expected
+                      (merge-pathnames
+                       \"cclsh/quicklisp/\"
+                       (uiop:ensure-directory-pathname
+                        (pathname (cclsh:getenv \"XDG_DATA_HOME\"))))))
                (when available
                  (funcall quickload :quicklisp :silent t))
-               (format t \"__BAKED_QUICKLISP__~s__~%\" available))"))
+               (let* ((quicklisp-system
+                        (asdf:find-system \"quicklisp\" nil))
+                      (quicklisp-source
+                        (and quicklisp-system
+                             (asdf:system-source-file quicklisp-system)))
+                      (registered (asdf:registered-systems))
+                      (portable
+                        (and home
+                             (uiop:subpathp home expected)
+                             (probe-file (merge-pathnames
+                                          \"setup.lisp\" home))
+                             quicklisp-source
+                             (uiop:subpathp quicklisp-source home)
+                             (not (find-package \"CCLSH-BUILD\"))
+                             (not (member \"cclsh\" registered
+                                          :test #'string=))
+                             (not (member \"clinedi\" registered
+                                          :test #'string=))
+                             t)))
+                 (format t \"__BAKED_QUICKLISP__~s:~s__~%\"
+                         available portable)))"))
          (output (direct-result-output result)))
     (integration-require-success result "baked Quicklisp")
     (integration-ensure
-     (integration-contains-p "__BAKED_QUICKLISP__T__" output)
-     "saved image has no working QL:QUICKLOAD: ~a"
+     (integration-contains-p "__BAKED_QUICKLISP__T:T__" output)
+     "saved image has no portable QL:QUICKLOAD: ~a"
      (integration-tail output))))
 
 (defun integration-check-baked-clinedi ()

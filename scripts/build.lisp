@@ -12,6 +12,11 @@
       '(:character-encoding :utf-8 :line-termination :unix)
       ccl:*terminal-character-encoding-name* ':utf-8)
 
+(defpackage #:cclsh-build
+  (:use #:cl))
+
+(in-package #:cclsh-build)
+
 (defun build-getenv-utf-8 (name)
   "The UTF-8 value of environment variable NAME, or NIL."
   (ccl::with-utf-8-cstr (encoded-name name)
@@ -23,8 +28,46 @@
 
 (require :asdf)
 
-(defun build-quicklisp-setup-pathname ()
-  "The Quicklisp setup file required by saved cclsh images."
+(defparameter *build-quicklisp-root-files*
+  '("setup.lisp" "asdf.lisp" "client-info.sexp")
+  "Root Quicklisp files allowed into the sanitized build template.")
+
+(defparameter *build-quicklisp-client-files*
+  '("bundle-template.lisp"
+    "bundle.lisp"
+    "cdb.lisp"
+    "client-info.lisp"
+    "client-update.lisp"
+    "client.lisp"
+    "config.lisp"
+    "deflate.lisp"
+    "dist-update.lisp"
+    "dist.lisp"
+    "fetch-gzipped.lisp"
+    "http.lisp"
+    "impl-util.lisp"
+    "impl.lisp"
+    "local-projects.lisp"
+    "minitar.lisp"
+    "misc.lisp"
+    "network.lisp"
+    "package.lisp"
+    "progress.lisp"
+    "quicklisp.asd"
+    "setup.lisp"
+    "utils.lisp"
+    "version.txt")
+  "Quicklisp client files allowed into the sanitized build template.")
+
+(defparameter *build-quicklisp-dist-files*
+  '("distinfo.txt" "enabled.txt" "releases.txt" "systems.txt")
+  "Quicklisp distribution files allowed into the sanitized build template.")
+
+(defvar *build-quicklisp-home* nil
+  "Temporary sanitized Quicklisp home used by this build.")
+
+(defun build-quicklisp-source-setup-pathname ()
+  "The source Quicklisp setup file used to create a sanitized template."
   (let ((override (build-getenv-utf-8 "CCLSH_QUICKLISP_SETUP")))
     (if (and override (plusp (length override)))
         (pathname override)
@@ -36,6 +79,45 @@
   (format *error-output* "cclsh build: error: ~?~%" control arguments)
   (finish-output *error-output*)
   (ccl:quit 1))
+
+(defun build-quicklisp-relative-files ()
+  "Return the strict allowlist of Quicklisp template files."
+  (append
+   *build-quicklisp-root-files*
+   (mapcar (lambda (name) (concatenate 'string "quicklisp/" name))
+           *build-quicklisp-client-files*)
+   (mapcar (lambda (name)
+             (concatenate 'string "dists/quicklisp/" name))
+           *build-quicklisp-dist-files*)))
+
+(defun build-materialize-quicklisp-template ()
+  "Copy sanitized Quicklisp metadata into a private temporary home."
+  (let* ((setup  (build-quicklisp-source-setup-pathname))
+         (source (uiop:pathname-directory-pathname setup))
+         (target
+           (merge-pathnames
+            (format nil ".cclsh-quicklisp-build.~d/" (ccl::getpid))
+            (truename "./"))))
+    (unless (probe-file setup)
+      (build-fail
+       "Quicklisp is required, but ~a does not exist.~%~
+        Install it there, or set CCLSH_QUICKLISP_SETUP to its setup.lisp."
+       setup))
+    (when (probe-file target)
+      (uiop:delete-directory-tree target
+                                  :validate t
+                                  :if-does-not-exist ':ignore))
+    (dolist (relative (build-quicklisp-relative-files))
+      (let ((source-file (merge-pathnames relative source))
+            (target-file (merge-pathnames relative target)))
+        (unless (probe-file source-file)
+          (build-fail "Quicklisp template input is missing: ~a"
+                      source-file))
+        (ensure-directories-exist target-file)
+        (uiop:copy-file source-file target-file)))
+    (ensure-directories-exist (merge-pathnames "local-projects/" target))
+    (setf *build-quicklisp-home* target)
+    target))
 
 (defun build-git-output (directory arguments)
   "Trimmed output of a Git command in DIRECTORY, or NIL on failure."
@@ -85,17 +167,10 @@
       (build-fail "could not read dependencies.lock: ~a" condition))))
 
 (defun build-load-quicklisp ()
-  "Load the required Quicklisp setup and verify its public entry point."
-  (let ((setup (build-quicklisp-setup-pathname)))
-    (unless (handler-case (probe-file setup)
-              (error (condition)
-                (build-fail "could not access Quicklisp setup ~a: ~a"
-                            setup condition)))
-      (build-fail
-       "Quicklisp is required, but ~a does not exist.~%~
-        Install it there, or set CCLSH_QUICKLISP_SETUP to its setup.lisp."
-       setup))
-    (format t "Including Quicklisp from ~a~%" setup)
+  "Load sanitized Quicklisp metadata and verify its public entry point."
+  (let* ((home  (build-materialize-quicklisp-template))
+         (setup (merge-pathnames "setup.lisp" home)))
+    (format t "Including sanitized Quicklisp metadata~%")
     (finish-output)
     (handler-case
         (load setup :verbose nil :external-format ':utf-8)
@@ -114,33 +189,31 @@
 (defvar *build-clinedi-identity* nil
   "Verified pathname, repository and commit of the loaded Clinedi system.")
 
-(defun build-initialize-source-registry ()
-  "Expose only this checkout through ASDF's ordinary source registry.
-   Quicklisp's local-project searcher remains available separately."
-  (let ((root (truename "./")))
+(defun build-initialize-source-registry (clinedi-asd)
+  "Expose only this checkout and CLINEDI-ASD to ASDF."
+  (let ((root              (truename "./"))
+        (clinedi-directory
+          (uiop:pathname-directory-pathname clinedi-asd)))
     (asdf:initialize-source-registry
      `(:source-registry
        (:directory ,root)
+       (:directory ,clinedi-directory)
        :ignore-inherited-configuration)))
   (values))
 
-(defun build-local-clinedi-asd ()
-  "Refresh Quicklisp local projects and return its selected clinedi.asd."
-  (handler-case
-      (progn
-        (uiop:symbol-call '#:ql '#:register-local-projects)
-        (asdf:clear-system "clinedi")
-        (let ((asd
-                (uiop:symbol-call '#:ql
-                                  '#:local-projects-searcher
-                                  "clinedi")))
-          (unless asd
-            (build-fail
-             "Quicklisp did not find clinedi in any QL:*LOCAL-PROJECT-DIRECTORIES*.~%Add the Clinedi checkout there, for example as local-projects/clinedi."))
-          (truename asd)))
-    (error (condition)
-      (build-fail "could not discover Clinedi through Quicklisp: ~a"
-                  condition))))
+(defun build-clinedi-asd-pathname ()
+  "Return the explicit sibling or overridden Clinedi ASD pathname."
+  (let* ((override (build-getenv-utf-8 "CCLSH_CLINEDI_SOURCE"))
+         (directory
+           (if (and override (plusp (length override)))
+               (uiop:ensure-directory-pathname (pathname override))
+               (merge-pathnames "../clinedi/" (truename "./"))))
+         (asd (merge-pathnames "clinedi.asd" directory)))
+    (unless (probe-file asd)
+      (build-fail
+       "Clinedi checkout is missing at ~a.~%Set CCLSH_CLINEDI_SOURCE to its repository directory."
+       directory))
+    (truename asd)))
 
 (defun build-clinedi-identity (asd expected-commit)
   "Return the clean, locked Git identity containing Clinedi ASD."
@@ -162,7 +235,7 @@
                                     root-output)))
            (expected-asd (truename (merge-pathnames "clinedi.asd" root))))
       (unless (equal asd expected-asd)
-        (build-fail "Quicklisp selected ~a instead of repository-root ~a"
+        (build-fail "selected ~a instead of repository-root ~a"
                     asd expected-asd))
       (unless (and commit (string= commit expected-commit))
         (build-fail
@@ -174,10 +247,11 @@
       (list :asd asd :root root :commit commit))))
 
 (defun build-load-clinedi ()
-  "Load the exact clean Clinedi revision selected by Quicklisp."
+  "Load the exact clean Clinedi revision selected for this build."
   (let* ((expected-commit (build-clinedi-lock-commit))
-         (asd             (build-local-clinedi-asd))
+         (asd             (build-clinedi-asd-pathname))
          (identity        (build-clinedi-identity asd expected-commit)))
+    (build-initialize-source-registry asd)
     (asdf:load-asd asd)
     (let ((selected
             (truename
@@ -208,7 +282,6 @@
                   asd selected)))
   (values))
 
-(build-initialize-source-registry)
 (build-load-clinedi)
 
 (defun build-load-cclsh ()
@@ -220,10 +293,34 @@
                     (asdf:find-system "cclsh")))))
       (unless (equal asd loaded)
         (build-fail "ASDF selected ~a instead of ~a" loaded asd)))
-    (asdf:load-system "cclsh")))
+    (asdf:load-system "cclsh" :force t)))
 
 (build-load-cclsh)
 (build-verify-clinedi-identity)
+
+(defun build-read-file-octets (file)
+  "Read FILE into a simple octet vector."
+  (with-open-file (stream file
+                          :direction ':input
+                          :element-type '(unsigned-byte 8))
+    (let* ((length   (file-length stream))
+           (contents (make-array length
+                                 :element-type '(unsigned-byte 8))))
+      (unless (= length (read-sequence contents stream))
+        (build-fail "could not read complete Quicklisp template file: ~a"
+                    file))
+      contents)))
+
+(defun build-quicklisp-template-files ()
+  "Return a sanitized Quicklisp template for embedding in the image."
+  (let ((home (uiop:ensure-directory-pathname ql-setup:*quicklisp-home*)))
+    (mapcar
+     (lambda (relative)
+       (let ((file (merge-pathnames relative home)))
+         (unless (probe-file file)
+           (build-fail "Quicklisp template input is missing: ~a" file))
+         (list relative (build-read-file-octets file))))
+     (build-quicklisp-relative-files))))
 
 (defun build-git-commit ()
   "The short commit of the checkout, with a -dirty marker when the
@@ -241,24 +338,45 @@
                 (concatenate 'string commit "-dirty")
                 commit))))))
 
-(let ((commit          (build-git-commit))
-      (clinedi-commit (getf *build-clinedi-identity* ':commit))
-      (quicklisp-template
-        (build-getenv-utf-8 "CCLSH_PACKAGED_QUICKLISP_TEMPLATE")))
+(let* ((commit          (build-git-commit))
+       (clinedi-commit  (getf *build-clinedi-identity* ':commit))
+       (quicklisp-template
+         (build-getenv-utf-8 "CCLSH_PACKAGED_QUICKLISP_TEMPLATE"))
+       (quicklisp-files
+         (unless (and quicklisp-template
+                      (plusp (length quicklisp-template)))
+           (build-quicklisp-template-files))))
   (setf cclsh:*cclsh-build-commit*          commit
         cclsh:*cclsh-build-clinedi-commit* clinedi-commit
         cclsh::*packaged-quicklisp-template*
         (and quicklisp-template
              (plusp (length quicklisp-template))
-             quicklisp-template))
+             quicklisp-template)
+        cclsh::*packaged-quicklisp-files*           quicklisp-files
+        cclsh::*packaged-quicklisp-home*            nil
+        cclsh::*packaged-quicklisp-user-setup-home* nil
+        cclsh::*packaged-quicklisp-last-error*      nil)
   (format t "Build commit: ~a~%" (or commit "unknown")))
 
 ;; Keep the heap image separate from the kernel so installers can activate
 ;; a matched, content-addressed pair atomically. scripts/build installs the
 ;; local pair only after both files exist and the saved image validates.
 (build-verify-clinedi-identity)
+(dolist (system '("cclsh" "clinedi" "clinedi/tests" "quicklisp"))
+  (asdf:clear-system system))
 (format t "Copying the CCL kernel...~%")
 (uiop:copy-file (truename "/proc/self/exe") "cclsh.new")
+(setf *build-clinedi-identity* nil)
+(when *build-quicklisp-home*
+  (uiop:delete-directory-tree *build-quicklisp-home*
+                              :validate t
+                              :if-does-not-exist ':ignore)
+  (setf *build-quicklisp-home* nil))
+
+(in-package #:cl-user)
+
+(delete-package '#:cclsh-build)
+(ccl:gc)
 (format t "Saving cclsh image...~%")
 (ccl:save-application "cclsh.image.new"
                       :toplevel-function #'cclsh:shell-toplevel

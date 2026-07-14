@@ -6,6 +6,7 @@
 /.cclsh-build-releases/
 /.cclsh-build-transaction.*/
 /.cclsh-build-validation-home.*/
+/.cclsh-quicklisp-build.*/
 /.cclsh-state-transaction.*/
 /cclsh.attestation
 *.lx64fsl
