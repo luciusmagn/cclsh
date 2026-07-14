@@ -284,6 +284,24 @@ printf '%s\\n' $$ > \"$sidfile\"
 exec /usr/bin/timeout --signal=TERM --kill-after=1 \"$seconds\" \"$@\"
 ")
   (integration-write-program
+   "run-in-directory"
+   "#!/bin/sh
+directory=$1
+shift
+cd \"$directory\" || exit 125
+exec \"$@\"
+")
+  (integration-write-program
+   "login-cclsh"
+   "#!/usr/bin/env bash
+exec -a -cclsh \"$CCLSH_TEST_BINARY\" \"$@\"
+")
+  (integration-write-program
+   "--no-avx"
+   "#!/bin/sh
+printf '__RESERVED_COMMAND_OPERAND__\\n'
+")
+  (integration-write-program
    "pty-session"
    "#!/bin/sh
 sidfile=$1
@@ -355,6 +373,7 @@ exit 0
         (cons "CCLSH_QUICKLISP_SETUP" "/definitely/missing/setup.lisp")
         (cons "CCLSH_TEST_ROOT"
               (string-right-trim "/" *integration-directory*))
+        (cons "CCLSH_TEST_BINARY" *integration-binary*)
         (cons "LANG" "C")
         (cons "LC_ALL" "C")
         (cons "TERM" "xterm-256color")))
@@ -403,10 +422,13 @@ exit 0
                                   &key
                                     (timeout 10)
                                     input
+                                    (program *integration-binary*)
+                                    directory
                                     (environment (integration-environment)))
-  "Run saved cclsh with ARGUMENTS in a private, bounded session.
-   INPUT is NIL or a pathname suitable for CCL:RUN-PROGRAM. ENVIRONMENT
-   defaults to the isolated integration environment."
+  "Run PROGRAM with ARGUMENTS in a private, bounded session.
+   PROGRAM defaults to saved cclsh. INPUT is NIL or a pathname suitable
+   for CCL:RUN-PROGRAM. DIRECTORY optionally changes the child's working
+   directory. ENVIRONMENT defaults to the isolated integration environment."
   (let ((output-path (integration-output-path "out"))
         (error-path  (integration-output-path "err"))
         (session-path (integration-output-path "sid"))
@@ -423,8 +445,12 @@ exit 0
                         (concatenate 'string *integration-bin-directory*
                                      "bounded-session")
                         session-path
-                        (princ-to-string timeout)
-                        *integration-binary*)
+                        (princ-to-string timeout))
+                  (when directory
+                    (list (concatenate 'string *integration-bin-directory*
+                                       "run-in-directory")
+                          directory))
+                  (list program)
                   arguments)
                  :input input
                  :output output-path
@@ -481,6 +507,28 @@ exit 0
    (integration-tail (direct-result-output result))
    (integration-tail (direct-result-error-output result))))
 
+(defun integration-require-script-arguments (result expected context)
+  "Require RESULT to run a stateless script with EXPECTED as its *ARGV*."
+  (integration-require-success result context)
+  (integration-ensure
+   (and (integration-contains-p "__SCRIPT_ONLY__"
+                                (direct-result-output result))
+        (integration-contains-p "__SCRIPT_STARTUP__absent__"
+                                (direct-result-output result))
+        (integration-contains-p (format nil "__SCRIPT_ARGV__~s__" expected)
+                                (direct-result-output result))
+        (integration-contains-p
+         (format nil "__SCRIPT_PIPE_ARGV__~s__" expected)
+         (direct-result-output result))
+        (integration-contains-p
+         (format nil "__SCRIPT_CAPTURE_ARGV__~s__" expected)
+         (direct-result-output result))
+        (integration-contains-p "__SCRIPT_CAPTURE_STATUS__0__"
+                                (direct-result-output result)))
+   "~a did not preserve stateless script arguments: ~a"
+   context
+   (integration-tail (direct-result-output result))))
+
 
 ;;;; -- Direct pipeline checks --
 
@@ -493,13 +541,40 @@ exit 0
 
 (defun integration-check-command-line-modes ()
   "Require combined flags and stateless scripting modes to honor user state."
-  (let* ((xdg          (integration-path "argument-modes-config/"))
-         (config       (concatenate 'string xdg "cclsh/"))
-         (startup      (concatenate 'string config "startup.lisp"))
-         (history      (concatenate 'string config "history"))
-         (script       (integration-path "argument-mode-script.cclsh"))
-         (pipe-input   (integration-path "argument-mode-input.cclsh"))
-         (history-text "__ARGUMENT_MODE_HISTORY_SHOULD_NOT_LOAD__")
+  (let* ((xdg              (integration-path "argument-modes-config/"))
+         (config           (concatenate 'string xdg "cclsh/"))
+         (startup          (concatenate 'string config "startup.lisp"))
+         (history          (concatenate 'string config "history"))
+         (script           (integration-path
+                            "argument mode 猫 script.cclsh"))
+         (dash-script-name "--no-avx")
+         (dash-script      (integration-path dash-script-name))
+         (shebang-script   (concatenate
+                            'string *integration-bin-directory*
+                            "shebang argument mode 猫.cclsh"))
+         (login-program    (concatenate 'string
+                                        *integration-bin-directory*
+                                        "login-cclsh"))
+         (pipe-input       (integration-path "argument-mode-input.cclsh"))
+         (history-text     "__ARGUMENT_MODE_HISTORY_SHOULD_NOT_LOAD__")
+         (script-arguments '("" "-lc" "echo not-executed" "sp ace"
+                             "猫 λ" "--no-avx" "--stack-size"
+                             "16777216" "-Iignored-image" "--"))
+         (script-contents
+           "(format t \"__SCRIPT_ONLY__~%\")
+(format t \"__SCRIPT_STARTUP__~a__~%\"
+        (if (boundp '*argument-startup-loaded*)
+            (symbol-value '*argument-startup-loaded*)
+            \"absent\"))
+(format t \"__SCRIPT_ARGV__~s__~%\" *argv*)
+(defcommand script-argv-worker (label)
+  (format t \"__SCRIPT_~a_ARGV__~s__~%\" label *argv*)
+  0)
+(pipe (script-argv-worker \"PIPE\"))
+(multiple-value-bind (text status)
+    (capture (script-argv-worker \"CAPTURE\"))
+  (format t \"~a~%__SCRIPT_CAPTURE_STATUS__~d__~%\" text status))
+")
          (command
            (format nil
                    "(progn
@@ -523,14 +598,11 @@ exit 0
      startup
      "(setf *argument-startup-loaded* \"loaded\")\n")
     (integration-write-file history (format nil "~s~%" history-text))
-    (integration-write-file
-     script
-     "(format t \"__SCRIPT_ONLY__~%\")
-(format t \"__SCRIPT_STARTUP__~a__~%\"
-        (if (boundp '*argument-startup-loaded*)
-            (symbol-value '*argument-startup-loaded*)
-            \"absent\"))
-")
+    (integration-write-file script script-contents)
+    (integration-write-file dash-script script-contents)
+    (integration-write-program
+     "shebang argument mode 猫.cclsh"
+     (format nil "#!~a~%~a" *integration-binary* script-contents))
     (integration-write-file pipe-input (format nil "~a~%exit 0~%" command))
 
     (dolist (flags '(("-lc") ("-cl") ("-ilc") ("-ic")
@@ -586,18 +658,47 @@ exit 0
     (let ((result (integration-run-arguments (list "-xyz"))))
       (integration-require-success result "unknown short flags"))
 
-    (let ((result
-            (integration-run-arguments
-             (list script "-lc" "exit 91")
-             :environment configured-environment)))
-      (integration-require-success result "script argument boundary")
-      (integration-ensure
-       (and (integration-contains-p "__SCRIPT_ONLY__"
-                                    (direct-result-output result))
-            (integration-contains-p "__SCRIPT_STARTUP__absent__"
-                                    (direct-result-output result)))
-       "script arguments were parsed or script user state was loaded: ~a"
-       (integration-tail (direct-result-output result))))
+    (let* ((expected (cons script script-arguments))
+           (result
+             (integration-run-arguments
+              (cons script script-arguments)
+              :environment configured-environment)))
+      (integration-require-script-arguments
+       result expected "direct script argument boundary"))
+
+    (let* ((expected (cons dash-script-name script-arguments))
+           (result
+             (integration-run-arguments
+              (list* "--" dash-script-name script-arguments)
+              :directory *integration-directory*
+              :environment configured-environment)))
+      (integration-require-script-arguments
+       result expected "dash-prefixed script argument boundary"))
+
+    (let* ((expected (cons shebang-script script-arguments))
+           (result
+             (integration-run-arguments
+              script-arguments
+              :program shebang-script
+              :environment configured-environment)))
+      (integration-require-script-arguments
+       result expected "shebang script argument boundary"))
+
+    (dolist (program (list *integration-binary* login-program))
+      (let* ((context (if (string= program *integration-binary*)
+                          "reserved direct command operand"
+                          "reserved login command operand"))
+             (result
+               (integration-run-arguments
+                (list "-c" "--no-avx")
+                :program program)))
+        (integration-require-success result context)
+        (integration-ensure
+         (integration-contains-p "__RESERVED_COMMAND_OPERAND__"
+                                 (direct-result-output result))
+         "~a was consumed by the CCL kernel: ~a"
+         context
+         (integration-tail (direct-result-error-output result)))))
 
     (let ((result
             (integration-run-arguments

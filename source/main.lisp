@@ -215,16 +215,18 @@
     (dispatch-line command))
   (shell-quit *last-status*))
 
-(defun shell--run-script (path)
+(defun shell--run-script (path arguments)
   "Run the file at PATH as a cclsh script and exit with the last
    status. Like -c, scripts load no user state; this is also the
    shebang entry point since the kernel passes the script path as the
-   first argument."
+   first argument. Bind *ARGV* to PATH followed by ARGUMENTS."
   (terminal-encoding-setup)
   (terminal-signals-setup)
   (terminal-shell-attributes-save)
   (environment-setup)
-  (let ((*package* (find-package '#:cclsh-user)))
+  (let ((*package* (find-package '#:cclsh-user))
+        (*argv*    (list* path (copy-list arguments))))
+    (environment-package-sync)
     (handler-case
         (with-open-file (stream path
                                 :direction :input
@@ -251,36 +253,43 @@
 
 (defun shell--argument-plan (arguments)
   "Decode ARGUMENTS without performing an action.
-   Return ACTION, OPERAND and CONFIGURED-P. ACTION is :MAIN, :COMMAND,
-   :MISSING-COMMAND, :SCRIPT, :VERSION or :HELP. Lowercase c selects
-   command mode anywhere in a single-dash group. Lowercase l or i in
-   that group, or an earlier group, requests startup.lisp for command
-   mode. Other option letters and unknown long options are ignored."
+   Return ACTION, OPERAND, CONFIGURED-P and SCRIPT-ARGUMENTS. ACTION is
+   :MAIN, :COMMAND, :MISSING-COMMAND, :SCRIPT, :VERSION or :HELP.
+   Lowercase c selects command mode anywhere in a single-dash group.
+   Lowercase l or i in that group, or an earlier group, requests
+   startup.lisp for command mode. Other option letters and unknown long
+   options are ignored. A double dash ends option parsing."
   (loop with remaining = arguments
         with configured-p = nil
+        with options-p = t
         while remaining
         do (let* ((argument (pop remaining))
-                  (options  (shell--short-option-group argument)))
-             (cond ((string= argument "--version")
-                    (return (values ':version nil configured-p)))
-                   ((string= argument "--help")
-                    (return (values ':help nil configured-p)))
-                   ((string= argument "--")
-                    nil)
-                   (options
+                  (options  (and options-p
+                                 (shell--short-option-group argument))))
+             (cond ((and options-p (string= argument "--version"))
+                    (return (values ':version nil configured-p nil)))
+                   ((and options-p (string= argument "--help"))
+                    (return (values ':help nil configured-p nil)))
+                   ((and options-p (string= argument "--"))
+                    (setf options-p nil))
+                   ((and options-p options)
                     (when (or (find #\l options) (find #\i options))
                       (setf configured-p t))
                     (when (find #\c options)
                       (return
                         (if remaining
-                            (values ':command (pop remaining) configured-p)
-                            (values ':missing-command nil configured-p)))))
-                   ((and (plusp (length argument))
+                            (values ':command (pop remaining)
+                                    configured-p nil)
+                            (values ':missing-command nil
+                                    configured-p nil)))))
+                   ((and options-p
+                         (plusp (length argument))
                          (char= (char argument 0) #\-))
                     nil)
                    (t
-                    (return (values ':script argument configured-p)))))
-        finally (return (values ':main nil configured-p))))
+                    (return
+                      (values ':script argument configured-p remaining)))))
+        finally (return (values ':main nil configured-p nil))))
 
 (defun shell--process-arguments (arguments)
   "Handle command line ARGUMENTS. Returns only when the shell should
@@ -288,7 +297,7 @@
    script files exit the process themselves. Short flags may be combined
    in any order. Unknown flags are deliberately ignored so an exotic
    login invocation cannot lock anyone out."
-  (multiple-value-bind (action operand configured-p)
+  (multiple-value-bind (action operand configured-p script-arguments)
       (shell--argument-plan arguments)
     (ecase action
       (:main
@@ -299,7 +308,7 @@
        (format *error-output* "cclsh: -c requires an argument~%")
        (shell-quit 2))
       (:script
-       (shell--run-script operand))
+       (shell--run-script operand script-arguments))
       (:version
        (format t "cclsh ~a~@[ (~a)~]~@[ (clinedi ~a)~] (~a ~a)~%"
                *cclsh-version*
@@ -309,7 +318,8 @@
                (lisp-implementation-version))
        (shell-quit 0))
       (:help
-       (format t "usage: cclsh [-il] [-c command] [script] ~
+       (format t "usage: cclsh [-il] [-c command] [--] ~
+                  [script [argument...]] ~
                   [--version] [--help]~%~
                   short flags may be combined; -l/-i with -c load ~
                   startup.lisp~%")

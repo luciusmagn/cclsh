@@ -637,7 +637,8 @@
                                             standard-output
                                             error-output
                                             presentation-enabled
-                                            package)
+                                            package
+                                            argv)
   "Create STAGE's gated builtin task and all of its UTF-8 streams."
   (let ((owners nil)
         (complete nil))
@@ -694,6 +695,7 @@
                                 (*standard-output* output)
                                 (*error-output* error-stream)
                                 (*package* package)
+                                (*argv* argv)
                                 (*presentation-enabled*
                                   (and presentation-enabled
                                        (not presentation-disabled))))
@@ -929,6 +931,7 @@
         (standard-output *standard-output*)
         (error-output *error-output*)
         (package *package*)
+        (argv *argv*)
         (presentation-enabled *presentation-enabled*))
     (setf (pipeline-task-group-tasks group) nil)
     (dolist (stage (pipeline-plan-stages plan))
@@ -940,7 +943,8 @@
                  :standard-output standard-output
                  :error-output error-output
                  :presentation-enabled presentation-enabled
-                 :package package)))
+                 :package package
+                 :argv argv)))
           (setf (pipeline-stage-task stage) task)
           (unless first-task
             (setf first-task task))

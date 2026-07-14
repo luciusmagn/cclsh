@@ -34,6 +34,7 @@
            #:*cclsh-version*
            #:*cclsh-build-commit*
            #:*cclsh-build-clinedi-commit*
+           #:*argv*
            #:*directory-change-hooks*
            #:command
            #:command-name
@@ -98,3 +99,10 @@
                           #:command
                           #:defcommand)
   (:documentation "The package command lines and startup.lisp are evaluated in."))
+
+(in-package #:cclsh)
+
+(defvar *argv* nil
+  "Argument vector of the running cclsh script, or NIL outside script mode.
+The first element is the script path and the remaining elements are the
+arguments supplied after it.")
