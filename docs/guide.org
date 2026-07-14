@@ -233,26 +233,11 @@ instead. In =cclsh-user=, =export= designates the shell command; use
 =cl:export= for the package operator.
 
 cclsh maintains =CCLSH_PACKAGE= as the canonical name of the current
-Lisp package. It refreshes the value before rendering every prompt and in
-each command environment launched through cclsh, including after
-=(in-package ...)=. Direct calls to CCL's lower-level =run-program= bypass
-cclsh's environment snapshot. A
-guarded Starship custom module can put it at the end of a prompt's first
-line:
-
-#+begin_src toml
-# Add ${custom.cclsh_package} at the end of the first-line part of `format`.
-[custom.cclsh_package]
-shell = ["sh"]
-when = 'test -z "$STARSHIP_SHELL" && test -n "$CCLSH_PACKAGE"'
-command = 'printf %s "$CCLSH_PACKAGE"'
-format = " [$output]($style)"
-style = "bold purple"
-#+end_src
-
-The guard renders the module only for cclsh's deliberately blank
-=STARSHIP_SHELL=. Fish sets that variable to =fish=, so even a fish process
-started from cclsh inherits no package segment or placeholder.
+Lisp package. It refreshes the value before invoking the configured prompt
+renderer and in each command environment launched through cclsh, including
+after =(in-package ...)=. The built-in prompt displays the package directly.
+Direct calls to CCL's lower-level =run-program= made elsewhere bypass the
+refresh performed by cclsh's command and prompt boundaries.
 
 * Defining your own commands
 
@@ -384,7 +369,7 @@ they run concurrently and stream output to the next stage.
 * Unicode and bytes
 
 cclsh uses UTF-8 for terminal input and output, startup and history
-files, scripts, Starship output, environment names and values, child
+files, scripts, prompt renderer output, environment names and values, child
 arguments, executable paths, and captured pipeline text. This is an
 explicit shell invariant and does not depend on =LANG= or =LC_ALL=.
 The editor measures terminal cells rather than Lisp characters, so
@@ -442,9 +427,9 @@ Clinedi provides the Unicode-aware editing state, key decoding and terminal
 repaint loop. cclsh supplies shell completion, highlighting, history and prompt
 policy through its callbacks.
 
-Starship renders the configured prompt when available. If it is missing or
-fails, cclsh's built-in prompt begins with =username@hostname= and then shows
-the current directory and status sigil.
+The built-in prompt shows =username@hostname (PACKAGE) directory $=. Prompt
+policy is otherwise user configuration; see [[*Configuration][Configuration]] for the callback
+used to replace it.
 
 | Key                 | Action                              |
 |---------------------+-------------------------------------|
@@ -518,6 +503,25 @@ chmod 600 ~/.config/cclsh/startup.lisp
 
 The repository copy deliberately omits credentials, private services,
 display/session addresses, locale policy and machine-specific tool paths.
+
+Prompt rendering is configured through =*prompt-function*=. Leave it =nil=
+for =prompt-default=, or set it to a function designator in =startup.lisp=.
+The function receives keyword snapshots named =:status=,
+=:duration-milliseconds=, =:columns= and =:job-count=. A returned string is
+used verbatim, including ANSI or multiple lines; =nil= selects the built-in
+prompt. Errors and other return values are reported and safely fall back:
+
+#+begin_src lisp
+(defun compact-prompt
+    (&key status job-count &allow-other-keys)
+  (format nil "[~d/~d] ~a> " status job-count (package-name *package*)))
+
+(setf *prompt-function* 'compact-prompt)
+#+end_src
+
+The package environment is synchronized before this function runs. The last
+command status is dynamically protected while it runs, so prompt helpers
+cannot accidentally replace it.
 
 * Quicklisp and scripting
 

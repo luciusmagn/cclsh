@@ -65,10 +65,7 @@
   (values))
 
 (defun environment-setup ()
-  "Prepare environment variables for prompt rendering and children.
-   STARSHIP_SHELL is blanked so starship emits plain ANSI without
-   shell-specific escape wrappers."
-  (setenv "STARSHIP_SHELL" "")
+  "Prepare process environment variables for the shell and its children."
   (setenv "PWD" (directory-namestring-clean (current-directory)))
   (values))
 

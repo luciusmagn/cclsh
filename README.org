@@ -11,7 +11,6 @@ Unix command or a Lisp form, evaluated in a live CCL image.
 - Quicklisp (=~/quicklisp/setup.lisp= by default)
 - Clinedi at the revision recorded in =dependencies.lock=, registered as a
   Quicklisp local project
-- starship (prompt rendering, with a plain fallback when missing)
 - zoxide (optional directory ranking; =fzf= is also needed for =zi=)
 - Linux (terminal control talks to libc termios/ioctl directly)
 
@@ -156,6 +155,9 @@ scripts/integration-check
 - =~/.config/cclsh/startup.lisp= is loaded for interactive sessions and
   configured one-shots, history persists in =~/.config/cclsh/history=
   (=XDG_CONFIG_HOME= is respected).
+- The built-in prompt shows =username@hostname=, the current Lisp package,
+  directory and status sigil. Set =*prompt-function*= in =startup.lisp= to
+  supply any other prompt policy or external renderer.
 - External commands run as the terminal's foreground process group, so
   interactive programs work and Ctrl-C reaches the child, not the
   shell. Errors and Ctrl-C never drop you into the CCL debugger.
@@ -180,8 +182,8 @@ scripts/integration-check
 - Environment variables are lispy: =(setenv 'editor "vim")=,
   =(getenv :home)=, =(setf (env 'port) 8000)=, plus =export= and
   =unset= builtins. =CCLSH_PACKAGE= contains the canonical name of the
-  current Lisp package and is refreshed before Starship and external
-  commands launched through cclsh run.
+  current Lisp package and is refreshed before the configured prompt
+  renderer and external commands launched through cclsh run.
 - =(zoxide-setup)= enables =z=, =zi= and automatic recording of every
   successful =cd=. It is safe to call once from =startup.lisp= and does
   nothing destructive when zoxide is unavailable.

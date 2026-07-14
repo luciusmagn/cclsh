@@ -55,16 +55,77 @@
              (clinedi:text-cell-width "猫"))
 
 
-;;;; -- Prompt fallback --
+;;;; -- Prompt customization --
+
+(let* ((*package* (find-package '#:cclsh-user))
+       (prefix   (format nil "~a@~a (CCLSH-USER) "
+                         (cclsh::prompt--username)
+                         (cclsh::prompt--hostname)))
+       (prompt   (cclsh::ansi-strip (cclsh:prompt-default :status 0))))
+  (check-equal "default prompt begins with identity and package"
+               0
+               (search prefix prompt)))
+
+(let ((old-package-environment (cclsh:getenv "CCLSH_PACKAGE"))
+      (received                nil)
+      (custom-prompt           (format nil "custom~%> ")))
+  (unwind-protect
+      (let* ((*package* (find-package '#:cclsh-user))
+             (expected-job-count (cclsh::jobs-count))
+             (cclsh:*last-status* 73)
+             (cclsh:*prompt-function*
+               (lambda (&key status duration-milliseconds columns job-count
+                        &allow-other-keys)
+                 (setf received
+                       (list status duration-milliseconds columns job-count
+                             cclsh:*last-status*
+                             (cclsh:getenv "CCLSH_PACKAGE")))
+                 (setf cclsh:*last-status* 99)
+                 custom-prompt)))
+        (check-equal "custom prompt result is used verbatim"
+                     custom-prompt
+                     (cclsh::prompt-render 7 125 91))
+        (check-equal "custom prompt receives shell snapshots"
+                     (list 7 125 91 expected-job-count 7 "CCLSH-USER")
+                     received)
+        (check-equal "custom prompt preserves the last command status"
+                     73
+                     cclsh:*last-status*))
+    (if old-package-environment
+        (cclsh:setenv "CCLSH_PACKAGE" old-package-environment)
+        (cclsh::unsetenv "CCLSH_PACKAGE"))))
 
 (let* ((identity (format nil "~a@~a"
                          (cclsh::prompt--username)
                          (cclsh::prompt--hostname)))
-       (prompt   (cclsh::ansi-strip (cclsh::prompt-fallback))))
-  (check-equal "fallback prompt begins with username and hostname"
-               0
-               (search identity prompt)))
-
+       (cases
+         (list (list "NIL custom prompt selects the default"
+                     (lambda (&key &allow-other-keys)
+                       nil)
+                     nil)
+               (list "failing custom prompt selects the default"
+                     (lambda (&key &allow-other-keys)
+                       (error "injected prompt failure"))
+                     "renderer failed")
+               (list "non-string custom prompt selects the default"
+                     (lambda (&key &allow-other-keys)
+                       42)
+                     "instead of a string or NIL"))))
+  (dolist (case cases)
+    (destructuring-bind (name renderer expected-error) case
+      (let ((errors (make-string-output-stream))
+            (cclsh:*prompt-function* renderer))
+        (let ((*error-output* errors))
+          (check-equal name
+                       0
+                       (search identity
+                               (cclsh::ansi-strip
+                                (cclsh::prompt-render 0 0 80)))))
+          (let ((reported (get-output-stream-string errors)))
+            (check-equal (format nil "~a error report" name)
+                         (not (null expected-error))
+                         (and expected-error
+                              (not (null (search expected-error reported))))))))))
 
 ;;;; -- Command line arguments --
 

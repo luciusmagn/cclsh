@@ -227,9 +227,12 @@ prefix, and typing keeps the selected candidate before inserting. The newest
 history entry beginning with the current input appears in dim text; Right or
 C-f at the end accepts it.
 
-Starship renders the configured prompt when available. If it is missing or
-fails, the built-in prompt begins with username@hostname and then shows the
-current directory and status sigil.
+The built-in prompt shows username@hostname (PACKAGE) directory $. Set
+*prompt-function* in startup.lisp to a function designator for another prompt.
+It receives :status, :duration-milliseconds, :columns and :job-count keyword
+arguments. A string is used verbatim; NIL selects prompt-default. Errors and
+other values are reported and safely fall back. Use &allow-other-keys in custom
+functions so future context additions remain compatible.
 
   Left/Right C-b/C-f   move/accept   Ctrl-arrows move by word
   Up/Down C-p/C-n      history       C-w/C-h     kill word
@@ -278,13 +281,10 @@ Lowercase names like http_proxy need strings. ~ does not expand after
 =, use $HOME in values.
 
 CCLSH_PACKAGE is maintained automatically as the canonical name of the
-current Lisp package. It is refreshed before Starship renders a prompt and
-for external commands launched through cclsh, including after
-(in-package ...). Direct CCL:RUN-PROGRAM calls bypass that snapshot.
-Display it with a custom.cclsh_package Starship module guarded by both an
-empty STARSHIP_SHELL and a nonempty CCLSH_PACKAGE. Fish sets STARSHIP_SHELL
-to fish, so a fish process started below cclsh keeps the package segment
-hidden.")
+current Lisp package. It is refreshed before the configured prompt renderer
+and for external commands launched through cclsh, including after
+(in-package ...). The built-in prompt displays it directly. CCL:RUN-PROGRAM
+calls made elsewhere bypass the refresh performed at those boundaries.")
 
     ("startup" "configuration and safe mode"
      "~/.config/cclsh/startup.lisp loads for interactive sessions and

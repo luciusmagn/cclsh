@@ -36,6 +36,8 @@
            #:*cclsh-build-clinedi-commit*
            #:*argv*
            #:*directory-change-hooks*
+           #:*prompt-function*
+           #:prompt-default
            #:command
            #:command-name
            #:command-function

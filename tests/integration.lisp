@@ -185,7 +185,7 @@
   (ensure-directories-exist
    (concatenate 'string *integration-bin-directory* ".keep"))
   (integration-write-program
-   "starship"
+   "prompt-renderer"
    "#!/bin/sh
 file=$CCLSH_TEST_ROOT/prompt-count
 n=0
@@ -194,6 +194,35 @@ n=$((n + 1))
 printf '%s\\n' \"$n\" > \"$file\"
 printf '%s\\n' \"\${CCLSH_PACKAGE-}\" > \"$CCLSH_TEST_ROOT/prompt-package\"
 printf '你好 🐈 λ __CCLSH_PROMPT_%s__ ' \"$n\"
+")
+  (integration-write-file
+   (integration-path "cclsh/startup.lisp")
+   "(in-package #:cclsh-user)
+
+(defun integration--prompt-renderer
+    (&key status duration-milliseconds columns job-count
+     &allow-other-keys)
+  \"Render the integration prompt through its deterministic test program.\"
+  (declare (ignore status duration-milliseconds columns job-count))
+  (handler-case
+      (let* ((output (make-string-output-stream))
+             (process
+               (ccl:run-program \"prompt-renderer\" nil
+                                :input nil
+                                :output output
+                                :error nil
+                                :wait t
+                                :external-format ':utf-8)))
+        (multiple-value-bind (state code)
+            (ccl:external-process-status process)
+          (let ((prompt (get-output-stream-string output)))
+            (and (eq state ':exited)
+                 (zerop code)
+                 (plusp (length prompt))
+                 prompt))))
+    (error () nil)))
+
+(setf *prompt-function* 'integration--prompt-renderer)
 ")
   (integration-write-program
    "pgid-left"
@@ -711,13 +740,36 @@ exit 0
        "piped input loaded user state: ~a"
        (integration-tail (direct-result-output result))))))
 
+(defun integration-check-default-prompt ()
+  "Require the built-in prompt to ignore provider executables on PATH."
+  (let ((count-file (integration-path "prompt-count")))
+    (ignore-errors (delete-file count-file))
+    (let* ((result
+             (integration-run
+              "(let ((cclsh:*prompt-function* nil))
+                 (format t \"__DEFAULT_PROMPT__~a__DEFAULT_PROMPT_END__~%\"
+                         (cclsh::ansi-strip
+                          (cclsh::prompt-render 0 0 80))))"))
+           (output (direct-result-output result)))
+      (integration-require-success result "provider-neutral default prompt")
+      (integration-ensure
+       (and (integration-contains-p "__DEFAULT_PROMPT__" output)
+            (integration-contains-p "@" output)
+            (integration-contains-p "(CCLSH-USER)" output))
+       "built-in prompt omitted identity or package: ~a"
+       (integration-tail output))
+      (integration-ensure
+       (not (probe-file count-file))
+       "built-in prompt executed a provider discovered on PATH"))))
+
 (defun integration-check-package-environment ()
-  "Require package changes to reach Starship and external children."
+  "Require package changes to reach prompt renderers and external children."
   (let* ((package-name "CCLSH-INTEGRATION-猫-PACKAGE")
          (prompt-file  (integration-path "prompt-package"))
          (result
            (integration-run
             "(progn
+               (cclsh::startup-load)
                (defpackage #:cclsh-integration-猫-package (:use #:cl))
                (in-package #:cclsh-integration-猫-package)
                (cclsh:setenv \"CCLSH_PACKAGE\" \"STALE\")
@@ -728,7 +780,7 @@ exit 0
                  (format t \"__PACKAGE_CHILD__~a:~d__~%\"
                          output status))
                (cclsh:setenv \"CCLSH_PACKAGE\" \"STALE\")
-               (cclsh::prompt-starship 0 0 80)
+               (cclsh::prompt-render 0 0 80)
                (format t \"__PACKAGE_PROCESS__~a__~%\"
                        (cclsh:getenv \"CCLSH_PACKAGE\"))
                (values))"))
@@ -742,13 +794,13 @@ exit 0
     (integration-ensure
      (integration-contains-p
       (format nil "__PACKAGE_PROCESS__~a__" package-name) output)
-     "Starship rendering did not refresh the process package: ~a"
+     "prompt rendering did not refresh the process package: ~a"
      (integration-tail output))
     (integration-ensure
      (and (probe-file prompt-file)
           (string= (format nil "~a~%" package-name)
                    (integration-read-file prompt-file)))
-     "Starship did not inherit the current package")))
+     "configured prompt did not inherit the current package")))
 
 (defun integration-check-baked-quicklisp ()
   "Require the saved image to contain a working Quicklisp entry point."
@@ -1075,6 +1127,7 @@ exit 0
          (form
            (format nil
                    "(progn
+                      (cclsh::startup-load)
                       (format t \"__UTF8_DEFAULT__~~s~~%\"
                               ccl:*default-file-character-encoding*)
                       (defcommand emit-unicode ()
@@ -1121,7 +1174,7 @@ exit 0
                               :iso-8859-1))
                         (format t
                                 \"__UTF8_PROMPT__~~a__UTF8_PROMPT_END__~~%\"
-                                (cclsh::prompt-starship 0 0 80))))"
+                                (cclsh::prompt-render 0 0 80))))"
                    text printf-format text file file program text
                    program-name text *integration-binary* script))
          (result (integration-run form :timeout 15))
@@ -1559,7 +1612,8 @@ exit 0
           (append (list "/usr/bin/env" "-i")
                   (mapcar (lambda (pair)
                             (format nil "~a=~a" (first pair) (rest pair)))
-                          (integration-environment))
+                          (integration-environment-replace
+                           (cons "CCLSH_SAFE" "")))
                   (list *integration-binary*))))
     (format nil "~{~a~^ ~}" (mapcar #'integration-shell-quote parts))))
 
@@ -2075,6 +2129,8 @@ exit 0
                         #'integration-check-image-startup)
       (integration-test "command-line modes and user state"
                         #'integration-check-command-line-modes)
+      (integration-test "provider-neutral default prompt"
+                        #'integration-check-default-prompt)
       (integration-test "current package environment"
                         #'integration-check-package-environment)
       (integration-test "Quicklisp baked into saved image"
