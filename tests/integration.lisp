@@ -237,6 +237,24 @@ right=$(ps -o pgid= -p $$ | tr -d ' ')
 printf '__PGIDS__%s:%s\\n' \"$left\" \"$right\"
 ")
   (integration-write-program
+   "library-foreground"
+   "#!/bin/sh
+group=$(ps -o pgid= -p $$ | tr -d ' ')
+foreground=$(ps -o tpgid= -p $$ | tr -d ' ')
+if test \"$group\" = \"$foreground\"; then
+    printf '__LIBRARY_CHILD_FOREGROUND__\\n'
+else
+    printf '__LIBRARY_CHILD_BACKGROUND__%s:%s\\n' \"$group\" \"$foreground\"
+    exit 9
+fi
+")
+  (integration-write-program
+   "library-stop"
+   "#!/bin/sh
+kill -STOP $$
+printf '__LIBRARY_STOP_RESUMED__\\n'
+")
+  (integration-write-program
    "longproducer"
    "#!/bin/sh
 trap 'printf \"__LONG_CONTINUED__\\n\"' CONT
@@ -575,6 +593,149 @@ exit 0
 
 
 ;;;; -- Direct pipeline checks --
+
+(defun integration-check-library-pty ()
+  "Require a Quickloaded pipeline to return control to its host CCL."
+  (let* ((setup
+           (or (let ((override (uiop:getenv "CCLSH_QUICKLISP_SETUP")))
+                 (and override
+                      (plusp (length override))
+                      (probe-file override)))
+               (probe-file
+                (merge-pathnames "quicklisp/setup.lisp"
+                                 (user-homedir-pathname)))
+               (integration-fail "Quicklisp setup.lisp is unavailable")))
+         (input (integration-path "library-host.input"))
+         (clinedi-directory
+           (let ((override (uiop:getenv "CCLSH_CLINEDI_SOURCE")))
+             (if (and override (plusp (length override)))
+                 (uiop:ensure-directory-pathname override)
+                 (truename "../clinedi/"))))
+         (clinedi-asd
+           (truename (merge-pathnames "clinedi.asd" clinedi-directory)))
+         (cclsh-asd (truename "cclsh.asd"))
+         (ccl-command (or (uiop:getenv "CCLSH_TEST_CCL") "ccl"))
+         (ccl-image (uiop:getenv "CCLSH_TEST_CCL_IMAGE"))
+         (ccl-command-line
+           (format nil "~{~a~^ ~}"
+                   (mapcar
+                    #'integration-shell-quote
+                    (append (list ccl-command)
+                            (when (and ccl-image
+                                       (plusp (length ccl-image)))
+                              (list "-I" ccl-image))
+                            (list "-n"))))))
+    (integration-write-file
+     input
+     (format nil
+             "(require :asdf)~%
+              (ccl:%stack-block ((signals 128))~%
+                (unless~%
+                    (and (zerop (ccl:external-call~%
+                                 \"sigemptyset\"~%
+                                 :address signals :int))~%
+                         (zerop (ccl:external-call~%
+                                 \"sigaddset\"~%
+                                 :address signals :int 22 :int))~%
+                         (zerop (ccl:external-call~%
+                                 \"pthread_sigmask\"~%
+                                 :int 1~%
+                                 :address signals~%
+                                 :address (ccl:%null-ptr)~%
+                                 :int)))~%
+                  (error \"cannot establish the signal-mask precondition\")))~%
+              (ccl:external-call~%
+               \"signal\" :int 22 :address (ccl:%int-to-ptr 0) :address)~%
+              (load ~s :verbose nil :external-format :utf-8)~%
+              (asdf:load-asd ~s)~%
+              (asdf:load-asd ~s)~%
+              (ql:quickload :cclsh :silent t)~%
+              (in-package :cclsh-user)~%
+              (flet ((sigttou-blocked-p ()~%
+                       (ccl:%stack-block~%
+                           ((signals cclsh::+terminal-sigset-size+))~%
+                         (unless~%
+                             (zerop~%
+                              (ccl:external-call~%
+                               \"pthread_sigmask\"~%
+                               :int cclsh::+terminal-sig-block+~%
+                               :address (ccl:%null-ptr)~%
+                               :address signals~%
+                               :int))~%
+                           (error \"cannot inspect the signal mask\"))~%
+                         (= 1 (ccl:external-call~%
+                               \"sigismember\"~%
+                               :address signals~%
+                               :int cclsh::+sigttou+~%
+                               :int))))~%
+                      (sigttou-default-p ()~%
+                        (let* ((default (ccl:%int-to-ptr 0))~%
+                               (previous~%
+                                 (ccl:external-call~%
+                                  \"signal\"~%
+                                  :int cclsh::+sigttou+~%
+                                  :address default~%
+                                  :address)))~%
+                          (unwind-protect~%
+                              (ccl:%ptr-eql previous default)~%
+                            (ccl:external-call~%
+                             \"signal\"~%
+                             :int cclsh::+sigttou+~%
+                             :address previous~%
+                             :address)))))~%
+                (let ((before (sigttou-blocked-p))~%
+                      (stopped-status (pipe (library-stop)))~%
+                      (resumed-status (fg))~%
+                      (status (pipe (echo \"balls\") (rev)))~%
+                      (foreground-status~%
+                        (pipe (library-foreground) (cat))))~%
+                  (multiple-value-bind (foreground code)~%
+                      (cclsh::terminal-current-foreground)~%
+                    (format t~%
+                            \"__LIBRARY~~cPIPE__~~s:~~s:~~s:~~s:~~s:~~s:~~s:~~s:~~s__~~%\"~%
+                            #\\_~%
+                            (= stopped-status~%
+                               (+ 128 cclsh::+sigtstp+))~%
+                            (zerop resumed-status)~%
+                            (zerop status)~%
+                            (zerop foreground-status)~%
+                            (and foreground~%
+                                 (= foreground~%
+                                    (cclsh::terminal-own-process-group)))~%
+                            (zerop code)~%
+                            (null cclsh::*terminal-control-signals-active*)~%
+                            (and (not before)~%
+                                 (eql before (sigttou-blocked-p)))~%
+                            (sigttou-default-p)))))~%
+              (ccl:quit 0)~%"
+             (namestring setup)
+             (namestring clinedi-asd)
+             (namestring cclsh-asd)))
+    (let* ((result
+             (integration-run-arguments
+              (list "-qefc" ccl-command-line "/dev/null")
+              :program "/usr/bin/script"
+              :input input
+              :timeout 30))
+           (output (direct-result-output result)))
+      (integration-require-success result "Quickloaded CCLSH pipeline")
+      (integration-ensure
+       (integration-contains-p "sllab" output)
+       "Quickloaded pipeline produced no reversed output: ~a"
+       (integration-tail output))
+      (integration-ensure
+       (integration-contains-p "__LIBRARY_CHILD_FOREGROUND__" output)
+       "Quickloaded child did not own the terminal: ~a"
+       (integration-tail output))
+      (integration-ensure
+       (integration-contains-p "__LIBRARY_STOP_RESUMED__" output)
+       "Quickloaded stopped job did not resume: ~a"
+       (integration-tail output))
+      (integration-ensure
+       (integration-contains-p
+        "__LIBRARY_PIPE__T:T:T:T:T:T:T:T:T__" output)
+       "host CCL did not reclaim its terminal cleanly: ~a"
+       (integration-tail output)))))
 
 (defun integration-check-image-startup ()
   "Start the saved image repeatedly to catch resume-path failures."
@@ -2326,6 +2487,8 @@ exit 0
 (unwind-protect
     (progn
       (integration-install-programs)
+      (integration-test "Quickloaded pipeline returns to host CCL"
+                        #'integration-check-library-pty)
       (integration-test "saved-image startup stress"
                         #'integration-check-image-startup)
       (integration-test "command-line modes and user state"

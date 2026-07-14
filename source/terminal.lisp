@@ -43,6 +43,15 @@
 (defconstant +sigttou+ 22
   "Signal number of SIGTTOU.")
 
+(defconstant +terminal-sigset-size+ 128
+  "Size in bytes of glibc's sigset_t on Linux.")
+
+(defconstant +terminal-sig-block+ 0
+  "PTHREAD_SIGMASK operation which adds signals to the caller's mask.")
+
+(defconstant +terminal-sig-setmask+ 2
+  "PTHREAD_SIGMASK operation which restores the calling thread's signal mask.")
+
 (defconstant +terminal-eintr+ 4
   "Linux errno for an interrupted system call.")
 
@@ -96,6 +105,64 @@
                    (format nil "system error ~d" code)
                    (ccl::%get-utf-8-cstring pointer)))))))
 
+(defvar *terminal-control-signals-active* nil
+  "True while CCLSH owns the host process's terminal signal policy.
+
+Shell entry points bind this after installing their persistent dispositions.
+Library callers leave it NIL, so individual terminal operations protect
+themselves without changing the embedding process's signal policy.")
+
+(defun terminal--signal-mask-check (result process-group operation)
+  "Require a successful signal-set or PTHREAD_SIGMASK RESULT."
+  (unless (zerop result)
+    (error 'terminal-control-error
+           :operation operation
+           :process-group process-group
+           :code (if (minusp result) (ccl::get-errno) result)))
+  (values))
+
+(defun terminal--call-with-sigttou-safe (process-group function)
+  "Call FUNCTION without letting terminal control stop the current process.
+
+The shell entry points already ignore SIGTTOU. In library use, block it only
+in the calling thread and restore the exact prior mask after FUNCTION."
+  (if *terminal-control-signals-active*
+      (funcall function)
+      (ccl:%stack-block ((signals +terminal-sigset-size+)
+                         (old-signals +terminal-sigset-size+))
+        (let ((mask-installed nil))
+          (unwind-protect
+              (progn
+                (terminal--signal-mask-check
+                 (external-call "sigemptyset" :address signals :int)
+                 process-group "prepare SIGTTOU blocking for")
+                (terminal--signal-mask-check
+                 (external-call "sigaddset"
+                                :address signals
+                                :int +sigttou+
+                                :int)
+                 process-group "prepare SIGTTOU blocking for")
+                (ccl:without-interrupts
+                  (terminal--signal-mask-check
+                   (external-call "pthread_sigmask"
+                                  :int +terminal-sig-block+
+                                  :address signals
+                                  :address old-signals
+                                  :int)
+                   process-group "block SIGTTOU while controlling")
+                  (setf mask-installed t))
+                (funcall function))
+            (when mask-installed
+              (ccl:without-interrupts
+                (terminal--signal-mask-check
+                 (external-call "pthread_sigmask"
+                                :int +terminal-sig-setmask+
+                                :address old-signals
+                                :address (ccl:%null-ptr)
+                                :int)
+                 process-group
+                 "restore the signal mask after controlling"))))))))
+
 (defvar *terminal-saved-termios* nil
   "Saved termios bytes, restored after raw line editing.")
 
@@ -129,16 +196,19 @@
 
 (defun terminal--set-termios (pointer)
   "Apply attributes at POINTER. Return success and final errno."
-  (loop
-    (when (zerop (external-call "tcsetattr"
-                                :int 0
-                                :int +tcsanow+
-                                :address pointer
-                                :int))
-      (return (values t 0)))
-    (let ((code (ccl::get-errno)))
-      (unless (= code +terminal-eintr+)
-        (return (values nil code))))))
+  (terminal--call-with-sigttou-safe
+   (external-call "getpgrp" :int)
+   (lambda ()
+     (loop
+       (when (zerop (external-call "tcsetattr"
+                                   :int 0
+                                   :int +tcsanow+
+                                   :address pointer
+                                   :int))
+         (return (values t 0)))
+       (let ((code (ccl::get-errno)))
+         (unless (= code +terminal-eintr+)
+           (return (values nil code))))))))
 
 (defun terminal-raw ()
   "Switch the terminal to character-at-a-time input without echo or
@@ -251,22 +321,35 @@
   (terminal--signal-disposition +sigttin+ 1)
   (values))
 
+(defmacro with-terminal-control-signals (&body body)
+  "Run BODY under the terminal signal policy of a CCLSH entry point."
+  `(progn
+     (terminal-signals-setup)
+     (let ((*terminal-control-signals-active* t))
+       ,@body)))
+
 (defun terminal-own-process-group ()
   "Return the shell's own process group id."
   (external-call "getpgrp" :int))
 
 (defun terminal-foreground (process-group)
   "Make PROCESS-GROUP the terminal's foreground process group.
-   Retries interrupted calls. Returns success and the final errno."
-  (loop
-    (when (zerop (external-call "tcsetpgrp"
-                                :int 0
-                                :int process-group
-                                :int))
-      (return (values t 0)))
-    (let ((code (ccl::get-errno)))
-      (unless (= code +terminal-eintr+)
-        (return (values nil code))))))
+   Retries interrupted calls. Returns success and the final errno.
+
+   TCSETPGRP sends SIGTTOU when the caller is currently in a background
+   process group. Library mode blocks it only for this operation."
+  (terminal--call-with-sigttou-safe
+   process-group
+   (lambda ()
+     (loop
+       (when (zerop (external-call "tcsetpgrp"
+                                   :int 0
+                                   :int process-group
+                                   :int))
+         (return (values t 0)))
+       (let ((code (ccl::get-errno)))
+         (unless (= code +terminal-eintr+)
+           (return (values nil code))))))))
 
 (defun terminal-current-foreground ()
   "Return the terminal's foreground process group and final errno."

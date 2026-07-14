@@ -140,7 +140,13 @@
    prompt render or a flaky read. Piped input is a stateless scripting
    mode and therefore skips startup.lisp and history."
   (terminal-encoding-setup)
-  (terminal-signals-setup)
+  (if *terminal-control-signals-active*
+      (shell--main)
+      (with-terminal-control-signals
+        (shell--main))))
+
+(defun shell--main ()
+  "Run the initialized shell loop for MAIN."
   (terminal-shell-attributes-save)
   (environment-setup)
   (quicklisp-packaged-setup)
@@ -205,7 +211,6 @@
    remote access. When CONFIGURED-P is true, load startup.lisp first;
    CCLSH_SAFE still suppresses it. Command mode never loads history."
   (terminal-encoding-setup)
-  (terminal-signals-setup)
   (terminal-shell-attributes-save)
   (environment-setup)
   (quicklisp-packaged-setup)
@@ -223,7 +228,6 @@
    shebang entry point since the kernel passes the script path as the
    first argument. Bind *ARGV* to PATH followed by ARGUMENTS."
   (terminal-encoding-setup)
-  (terminal-signals-setup)
   (terminal-shell-attributes-save)
   (environment-setup)
   (quicklisp-packaged-setup)
@@ -373,15 +377,16 @@
    stable invocation path, or the resolved running binary as fallback,
    so $SHELL callers land back in cclsh. A REPL session through MAIN
    leaves SHELL alone."
-  (handler-case
-      (progn
-        (let ((executable
-                (or (shell--invocation-path)
-                    (shell--executable-path))))
-          (when executable
-            (setenv "SHELL" executable)))
-        (shell--process-arguments (rest *command-line-argument-list*))
-        (main))
-    (serious-condition (condition)
-      (dispatch-report-error condition)
-      (shell-quit 70))))
+  (with-terminal-control-signals
+    (handler-case
+        (progn
+          (let ((executable
+                  (or (shell--invocation-path)
+                      (shell--executable-path))))
+            (when executable
+              (setenv "SHELL" executable)))
+          (shell--process-arguments (rest *command-line-argument-list*))
+          (main))
+      (serious-condition (condition)
+        (dispatch-report-error condition)
+        (shell-quit 70)))))

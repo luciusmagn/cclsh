@@ -12,7 +12,7 @@ if [ ! -s ./cclsh.image ]; then
     exit 2
 fi
 
-for program in script setsid timeout pkill ps tr grep stty seq yes head wc cat sleep printf
+for program in script setsid timeout pkill ps tr grep stty seq yes head wc cat sleep printf rev realpath
 do
     if ! command -v "$program" >/dev/null 2>&1; then
         echo "cclsh integration: required program not found: $program" >&2
@@ -61,8 +61,12 @@ if ! command -v "$ccl_command" >/dev/null 2>&1; then
     echo "cclsh integration: CCL executable not found: $ccl_command" >&2
     exit 1
 fi
+CCLSH_TEST_CCL=$(realpath -e "$(command -v "$ccl_command")")
+export CCLSH_TEST_CCL
 set -- -n -b
 if [ -n "${CCLSH_CCL_IMAGE:-}" ]; then
+    CCLSH_TEST_CCL_IMAGE=$(realpath -e "$CCLSH_CCL_IMAGE")
+    export CCLSH_TEST_CCL_IMAGE
     set -- -I "$CCLSH_CCL_IMAGE" "$@"
 fi
 "$ccl_command" "$@" \

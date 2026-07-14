@@ -44,6 +44,22 @@
     (unless (ccl:%null-ptr-p pointer)
       (ccl::%get-utf-8-cstring pointer))))
 
+(defun check-signal-blocked-p (signal)
+  "True when SIGNAL is blocked in the current native thread."
+  (ccl:%stack-block ((signals cclsh::+terminal-sigset-size+))
+    (unless
+        (zerop
+         (ccl:external-call "pthread_sigmask"
+                            :int cclsh::+terminal-sig-block+
+                            :address (ccl:%null-ptr)
+                            :address signals
+                            :int))
+      (error "cannot inspect the signal mask"))
+    (= 1 (ccl:external-call "sigismember"
+                            :address signals
+                            :int signal
+                            :int))))
+
 (defun check-path-mode (path)
   "Return PATH permissions as three or four octal digits."
   (string-trim '(#\Space #\Tab #\Newline #\Return)
@@ -83,6 +99,27 @@
 (check-equal "Clinedi supplies Unicode cell geometry"
              2
              (clinedi:text-cell-width "猫"))
+
+(check-equal "library load leaves terminal signal policy unclaimed"
+             nil
+             cclsh::*terminal-control-signals-active*)
+
+(let ((before (check-signal-blocked-p cclsh::+sigttou+))
+      (entered nil)
+      (unwound nil))
+  (handler-case
+      (cclsh::terminal--call-with-sigttou-safe
+       (cclsh::terminal-own-process-group)
+       (lambda ()
+         (setf entered t)
+         (error "injected terminal operation failure")))
+    (error ()
+      (setf unwound t)))
+  (check-equal "library terminal operation runs protected body" t entered)
+  (check-equal "library terminal operation propagates failure" t unwound)
+  (check-equal "library terminal failure restores signal mask"
+               before
+               (check-signal-blocked-p cclsh::+sigttou+)))
 
 
 ;;;; -- Prompt customization --

@@ -318,10 +318,10 @@ compose with pipelines, redirection and job control.
 
 =*last-status*= holds the exit status of the last command.
 
-By the way, this cuts both ways: cclsh is an ordinary ASDF system, so any
-Common Lisp program can =(ql:quickload :cclsh)= and call =run=, =pipe=,
-=capture= and friends directly, without starting the shell. See
-"Quicklisp and scripting" in the guide for the details and the caveats.
+By the way, this cuts both ways: once this checkout is visible to ASDF or
+Quicklisp, any Clozure Common Lisp program can =(ql:quickload :cclsh)= and
+call =run=, =pipe=, =capture= and friends directly, without starting the
+shell. See "Quicklisp and scripting" in the guide for details and caveats.
 
 * Line editor
 

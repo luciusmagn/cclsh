@@ -698,11 +698,12 @@ name to stop its own option parser at cclsh's command or script boundary.
 The process exit code is the shell's last status, or the argument of
 =exit=.
 
-By the way, the Quicklisp relationship runs in both directions. cclsh is
-an ordinary ASDF system, so any Common Lisp program can quickload it and
-call its process helpers directly, without starting the shell or calling
-=(main)=. =run=, =cmd=, =pipe=, =capture=, =seq=, =all=, =any=, =glob=
-and =defcommand= all work as soon as the system is loaded:
+By the way, the Quicklisp relationship runs in both directions. Once this
+checkout is visible to ASDF or Quicklisp, any Clozure Common Lisp program
+can quickload it and call its process helpers directly, without starting
+the shell or calling =(main)=. =run=, =cmd=, =pipe=, =capture=, =seq=,
+=all=, =any=, =glob= and =defcommand= all work as soon as the system is
+loaded:
 
 #+begin_src lisp
 (ql:quickload :cclsh)
@@ -716,9 +717,15 @@ the calling package; only the printed name matters, so nothing needs
 importing just to name a program. Package-qualify the macros and
 functions, or pull in exactly what a script needs with =:import-from=,
 rather than =:use=-ing =cclsh= wholesale, since it shadows =cl:export=
-for its own environment builtin. Pipeline execution takes the terminal's
-foreground process group only when one is attached, so this works the
-same from a batch script, a build tool or a bare REPL.
+for its own environment builtin. When standard input is a terminal, a
+foreground helper temporarily gives its child process group the terminal
+and then returns it to the host CCL process group. Shell entry points
+dynamically mark their terminal signal policy as active. Library calls leave
+that marker =nil=, block =SIGTTOU= only around the required terminal-control
+calls and restore the calling thread's prior signal mask. Loading the system
+does not change the host's signal dispositions. This works from a batch
+program, a build tool or a foreground CCL REPL. Do not run concurrent
+foreground helpers against the same terminal.
 
 * Using cclsh as your login shell
 
