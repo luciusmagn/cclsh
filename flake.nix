@@ -16,9 +16,28 @@
       lib = pkgs.lib;
       buildCommit = self.shortRev or self.dirtyShortRev or "unknown";
 
-      clinediRev = lib.removeSuffix "\n" (
-        lib.removePrefix "clinedi=" (builtins.readFile ./dependencies.lock)
-      );
+      dependencyLines = lib.splitString "\n" (builtins.readFile ./dependencies.lock);
+      dependencyRevision =
+        name:
+        let
+          prefix = "${name}=";
+          matches = builtins.filter (line: lib.hasPrefix prefix line) dependencyLines;
+        in
+        if builtins.length matches != 1 then
+          throw "dependencies.lock must contain exactly one ${prefix} entry"
+        else
+          let
+            revision = lib.removePrefix prefix (builtins.head matches);
+          in
+          if builtins.match "[0-9a-f]{40}" revision == null then
+            throw "dependencies.lock ${prefix} entry must be a full Git revision"
+          else
+            revision;
+
+      cclBaseRev = dependencyRevision "ccl-base";
+      cclXstateRev = dependencyRevision "ccl-xstate";
+      cclRev = dependencyRevision "ccl";
+      clinediRev = dependencyRevision "clinedi";
 
       clinediSource = pkgs.fetchgit {
         name = "clinedi-${builtins.substring 0 7 clinediRev}";
@@ -26,6 +45,19 @@
         rev = clinediRev;
         hash = "sha256-V7zlZ5NUXFyB2993NdsuLgY+AFKvYgNJu/+FclNYRWs=";
         leaveDotGit = true;
+      };
+
+      # The CCL release archive supplies bootstrap binaries that are absent
+      # from Git. Keep that archive as the base, but fetch every divergent
+      # source change from its immutable commit in the maintained fork.
+      cclXstatePatch = pkgs.fetchurl {
+        url = "https://github.com/luciusmagn/ccl/commit/${cclXstateRev}.diff";
+        hash = "sha256-YSitne9gEbXXQTZc0Pndc9YUefzIcEWdaQ2MooRQ0Vk=";
+      };
+
+      cclArgvPatch = pkgs.fetchurl {
+        url = "https://github.com/luciusmagn/ccl/commit/${cclRev}.diff";
+        hash = "sha256-q41Ywy0qIllOg/oaCO/ts3A1KfKMnW2Rw3KAv5DwVGg=";
       };
 
       quicklispTar = pkgs.fetchurl {
@@ -83,10 +115,39 @@
 
       patchedCcl = pkgs.ccl.overrideAttrs (old: {
         patches = (old.patches or [ ]) ++ [
-          ./patches/ccl-linux-xstate.patch
-          ./patches/ccl-cclsh-argv.patch
+          cclXstatePatch
+          cclArgvPatch
         ];
       });
+
+      cclPatchProvenance =
+        pkgs.runCommand "cclsh-ccl-patch-provenance"
+          {
+            nativeBuildInputs = [
+              pkgs.gnutar
+              pkgs.patch
+            ];
+          }
+          ''
+            mkdir local fork
+            tar -xf ${pkgs.ccl.src} -C local --strip-components=1
+            tar -xf ${pkgs.ccl.src} -C fork --strip-components=1
+
+            patch -d local -p1 < ${./patches/ccl-linux-xstate.patch}
+            patch -d local -p1 < ${./patches/ccl-cclsh-argv.patch}
+            patch -d fork -p1 < ${cclXstatePatch}
+            patch -d fork -p1 < ${cclArgvPatch}
+
+            cmp local/lisp-kernel/x86-exceptions.c \
+              fork/lisp-kernel/x86-exceptions.c
+            cmp local/lisp-kernel/pmcl-kernel.c \
+              fork/lisp-kernel/pmcl-kernel.c
+            printf '%s\n' \
+              "base ${cclBaseRev}" \
+              "xstate ${cclXstateRev}" \
+              "runtime ${cclRev}" \
+              >$out
+          '';
 
       cclsh = pkgs.stdenvNoCC.mkDerivation {
         pname = "cclsh";
@@ -180,55 +241,58 @@
         program = "${lib.getExe cclsh}";
       };
 
-      checks.${system}.installed = pkgs.runCommand "cclsh-installed-check" { } ''
-        export HOME="$TMPDIR/home"
-        export XDG_CACHE_HOME="$TMPDIR/cache"
-        export XDG_CONFIG_HOME="$TMPDIR/config"
-        export XDG_DATA_HOME="$TMPDIR/data"
-        mkdir -p "$HOME"
+      checks.${system} = {
+        ccl-patch-provenance = cclPatchProvenance;
+        installed = pkgs.runCommand "cclsh-installed-check" { } ''
+          export HOME="$TMPDIR/home"
+          export XDG_CACHE_HOME="$TMPDIR/cache"
+          export XDG_CONFIG_HOME="$TMPDIR/config"
+          export XDG_DATA_HOME="$TMPDIR/data"
+          mkdir -p "$HOME"
 
-        ${lib.getExe cclsh} --version >version
-        grep -F "cclsh 1.0.0" version
-        ${lib.getExe cclsh} -c 'exit 0'
-        ${lib.getExe cclsh} -c \
-          '(progn (unless (and (probe-file (merge-pathnames "setup.lisp" ql-setup:*quicklisp-home*)) (ql-dist:find-dist "quicklisp") (uiop:subpathp asdf:*user-cache* (uiop:ensure-directory-pathname (pathname (cclsh:getenv "XDG_CACHE_HOME")))) (member #P"${cclsh}/share/cclsh/" ql::*local-project-directories* :test (function equal))) (error "packaged Quicklisp is not writable and initialized")) (values))'
-        test -f "$XDG_DATA_HOME/cclsh/quicklisp/setup.lisp"
+          ${lib.getExe cclsh} --version >version
+          grep -F "cclsh 1.0.0" version
+          ${lib.getExe cclsh} -c 'exit 0'
+          ${lib.getExe cclsh} -c \
+            '(progn (unless (and (probe-file (merge-pathnames "setup.lisp" ql-setup:*quicklisp-home*)) (ql-dist:find-dist "quicklisp") (uiop:subpathp asdf:*user-cache* (uiop:ensure-directory-pathname (pathname (cclsh:getenv "XDG_CACHE_HOME")))) (member #P"${cclsh}/share/cclsh/" ql::*local-project-directories* :test (function equal))) (error "packaged Quicklisp is not writable and initialized")) (values))'
+          test -f "$XDG_DATA_HOME/cclsh/quicklisp/setup.lisp"
 
-        cp -R "$XDG_DATA_HOME/cclsh/quicklisp" "$HOME/quicklisp"
-        mkdir -p "$HOME/quicklisp/local-init" "$TMPDIR/personal-projects"
-        printf '%s\n' \
-          '(in-package #:quicklisp-client)' \
-          "(pushnew #P\"$TMPDIR/personal-projects/\" *local-project-directories* :test #'equal)" \
-          >"$HOME/quicklisp/local-init/cclsh-check.lisp"
+          cp -R "$XDG_DATA_HOME/cclsh/quicklisp" "$HOME/quicklisp"
+          mkdir -p "$HOME/quicklisp/local-init" "$TMPDIR/personal-projects"
+          printf '%s\n' \
+            '(in-package #:quicklisp-client)' \
+            "(pushnew #P\"$TMPDIR/personal-projects/\" *local-project-directories* :test #'equal)" \
+            >"$HOME/quicklisp/local-init/cclsh-check.lisp"
 
-        ${lib.getExe cclsh} -c \
-          "(when (member #P\"$TMPDIR/personal-projects/\" ql::*local-project-directories* :test (function equal)) (error \"plain command loaded Quicklisp local-init\"))"
-        ${lib.getExe cclsh} -lc \
-          "(unless (member #P\"$TMPDIR/personal-projects/\" ql::*local-project-directories* :test (function equal)) (error \"configured command skipped Quicklisp local-init\"))"
+          ${lib.getExe cclsh} -c \
+            "(when (member #P\"$TMPDIR/personal-projects/\" ql::*local-project-directories* :test (function equal)) (error \"plain command loaded Quicklisp local-init\"))"
+          ${lib.getExe cclsh} -lc \
+            "(unless (member #P\"$TMPDIR/personal-projects/\" ql::*local-project-directories* :test (function equal)) (error \"configured command skipped Quicklisp local-init\"))"
 
-        export CCLSH_QUICKLISP_HOME="$TMPDIR/incomplete"
-        mkdir -p "$CCLSH_QUICKLISP_HOME"
-        ${lib.getExe cclsh} -c \
-          '(when (quicklisp-setup) (error "incomplete Quicklisp override was accepted"))' \
-          2>incomplete-error
-        grep -F "exists without setup.lisp" incomplete-error
-        test ! -e "$CCLSH_QUICKLISP_HOME/setup.lisp"
+          export CCLSH_QUICKLISP_HOME="$TMPDIR/incomplete"
+          mkdir -p "$CCLSH_QUICKLISP_HOME"
+          ${lib.getExe cclsh} -c \
+            '(when (quicklisp-setup) (error "incomplete Quicklisp override was accepted"))' \
+            2>incomplete-error
+          grep -F "exists without setup.lisp" incomplete-error
+          test ! -e "$CCLSH_QUICKLISP_HOME/setup.lisp"
 
-        export CCLSH_QUICKLISP_HOME=/dev/null/quicklisp
-        ${lib.getExe cclsh} -c \
-          '(when (quicklisp-setup) (error "unwritable Quicklisp override was accepted"))' \
-          2>unwritable-error
-        grep -F "packaged Quicklisp unavailable" unwritable-error
+          export CCLSH_QUICKLISP_HOME=/dev/null/quicklisp
+          ${lib.getExe cclsh} -c \
+            '(when (quicklisp-setup) (error "unwritable Quicklisp override was accepted"))' \
+            2>unwritable-error
+          grep -F "packaged Quicklisp unavailable" unwritable-error
 
-        set +e
-        argument_output=$(${lib.getExe cclsh} -c --no-avx 2>&1)
-        argument_status=$?
-        set -e
-        test "$argument_status" -eq 127
-        printf '%s\n' "$argument_output" | grep -F -- --no-avx
+          set +e
+          argument_output=$(${lib.getExe cclsh} -c --no-avx 2>&1)
+          argument_status=$?
+          set -e
+          test "$argument_status" -eq 127
+          printf '%s\n' "$argument_output" | grep -F -- --no-avx
 
-        touch "$out"
-      '';
+          touch "$out"
+        '';
+      };
 
       devShells.${system}.default = pkgs.mkShell {
         packages = [

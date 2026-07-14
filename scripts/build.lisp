@@ -64,23 +64,23 @@
       (with-open-file (stream "dependencies.lock"
                               :direction       ':input
                               :external-format ':utf-8)
-        (let* ((line   (read-line stream nil nil))
-               (prefix "clinedi=")
-               (commit
-                 (and line
-                      (<= (length prefix) (length line))
-                      (string= prefix line :end2 (length prefix))
-                      (subseq line (length prefix)))))
-          (unless (and commit
-                       (= (length commit) 40)
-                       (every (lambda (character)
-                                (and (digit-char-p character 16)
-                                     (not (find character "ABCDEF"))))
-                              commit)
-                       (null (read-line stream nil nil)))
-            (build-fail
-             "dependencies.lock must contain exactly one clinedi=<40-character lowercase Git commit> line"))
-          commit))
+        (let ((commits '())
+              (prefix  "clinedi="))
+          (loop for line = (read-line stream nil nil)
+                while line
+                when (and (<= (length prefix) (length line))
+                          (string= prefix line :end2 (length prefix)))
+                  do (push (subseq line (length prefix)) commits))
+          (let ((commit (and (null (rest commits)) (first commits))))
+            (unless (and commit
+                         (= (length commit) 40)
+                         (every (lambda (character)
+                                  (and (digit-char-p character 16)
+                                       (not (find character "ABCDEF"))))
+                                commit))
+              (build-fail
+               "dependencies.lock must contain exactly one clinedi=<40-character lowercase Git commit> line"))
+            commit)))
     (error (condition)
       (build-fail "could not read dependencies.lock: ~a" condition))))
 
