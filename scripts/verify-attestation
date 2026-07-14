@@ -31,19 +31,24 @@ if ! image_hash=$(scripts/file-sha256 "$image"); then
     exit 1
 fi
 
-if ! {
-     printf '%s\n' 'cclsh-login-build-v1'
-     printf 'kernel-sha256 %s\n' "$kernel_hash"
-     printf 'image-sha256 %s\n' "$image_hash"
-     for patch in "$@"; do
-         if ! patch_hash=$(scripts/file-sha256 "$patch"); then
-             exit 1
-         fi
-         printf 'patch-sha256 %s %s\n' \
-             "$(basename "$patch")" \
-             "$patch_hash"
-     done
- } | cmp -s -- - "$attestation"
+if ! expected=$(
+    printf '%s\n' 'cclsh-login-build-v1'
+    printf 'kernel-sha256 %s\n' "$kernel_hash"
+    printf 'image-sha256 %s\n' "$image_hash"
+    for patch in "$@"; do
+        if ! patch_hash=$(scripts/file-sha256 "$patch"); then
+            exit 1
+        fi
+        printf 'patch-sha256 %s %s\n' \
+            "$(basename "$patch")" \
+            "$patch_hash"
+    done
+)
+then
+    echo "cclsh attestation: could not hash a required patch" >&2
+    exit 1
+fi
+if ! printf '%s\n' "$expected" | cmp -s -- - "$attestation"
 then
     echo "cclsh attestation: artifact or required-patch hash mismatch" >&2
     exit 1

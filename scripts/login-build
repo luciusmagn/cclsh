@@ -10,6 +10,12 @@ if [ "$#" -ne 3 ]; then
     echo "usage: scripts/login-build CCL-SOURCE CCL ATTESTATION" >&2
     exit 2
 fi
+if [ "$(realpath -m -- "$3")" != "$PWD/cclsh.attestation" ]; then
+    echo \
+        "cclsh login-build: attestation must be $PWD/cclsh.attestation" \
+        >&2
+    exit 2
+fi
 if [ "${CCLSH_LOGIN_STATE_TRANSACTION:-0}" != 1 ]; then
     CCLSH_LOGIN_STATE_TRANSACTION=1
     export CCLSH_LOGIN_STATE_TRANSACTION

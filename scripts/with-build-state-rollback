@@ -32,7 +32,7 @@ snapshot_path()
                 >&2
             return 1
         fi
-        ln -- "$snapshot_name" \
+        cp --reflink=auto --preserve=all -- "$snapshot_name" \
             "$transaction_directory/$snapshot_name.file"
     else
         : >"$transaction_directory/$snapshot_name.missing"

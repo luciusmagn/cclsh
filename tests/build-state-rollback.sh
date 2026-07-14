@@ -74,4 +74,48 @@ then
     exit 1
 fi
 
+printf '%s\n' old-attestation >"$project/cclsh.attestation"
+cp "$project/cclsh.attestation" "$project/attestation.expected"
+set +e
+(
+    cd "$project"
+    scripts/with-build-state-rollback sh -c '
+        printf "%s\n" in-place-mutation >cclsh.attestation
+        exit 73
+    '
+)
+mutation_status=$?
+set -e
+if [ "$mutation_status" -ne 73 ] ||
+   ! cmp -s "$project/attestation.expected" "$project/cclsh.attestation" ||
+   find "$project" -maxdepth 1 -name '.cclsh-state-transaction.*' \
+       -print -quit | grep -q .
+then
+    echo "rollback snapshot did not survive in-place mutation" >&2
+    exit 1
+fi
+
+set +e
+(
+    cd "$project"
+    scripts/with-build-state-rollback sh -c 'exit 74'
+)
+unchanged_status=$?
+set -e
+if [ "$unchanged_status" -ne 74 ] ||
+   ! cmp -s "$project/attestation.expected" "$project/cclsh.attestation" ||
+   find "$project" -maxdepth 1 -name '.cclsh-state-transaction.*' \
+       -print -quit | grep -q .
+then
+    echo "rollback failed when public regular state was unchanged" >&2
+    exit 1
+fi
+
+if scripts/login-build "$temporary_directory" ccl \
+     "$temporary_directory/custom.attestation" >/dev/null 2>&1
+then
+    echo "login-build accepted a nontransactional attestation path" >&2
+    exit 1
+fi
+
 echo "Build-state rollback checks passed."
