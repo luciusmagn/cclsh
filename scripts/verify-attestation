@@ -1,0 +1,57 @@
+#!/bin/sh
+# Verify that a login-build attestation matches one kernel/image pair and the
+# exact CCL patches required by this checkout.
+set -eu
+cd "$(dirname "$0")/.."
+
+if [ "$#" -ne 3 ]; then
+    echo \
+        "usage: scripts/verify-attestation KERNEL IMAGE ATTESTATION" \
+        >&2
+    exit 2
+fi
+
+kernel=$1
+image=$2
+attestation=$3
+set -- patches/ccl-linux-xstate.patch patches/ccl-cclsh-argv.patch
+if [ ! -f "$attestation" ] || [ -L "$attestation" ]; then
+    echo "cclsh attestation: missing regular attestation: $attestation" >&2
+    exit 1
+fi
+
+if ! kernel_hash=$(scripts/file-sha256 "$kernel"); then
+    exit 1
+fi
+if ! image_hash=$(scripts/file-sha256 "$image"); then
+    exit 1
+fi
+
+expected=$(mktemp "${TMPDIR:-/tmp}/cclsh-attestation.XXXXXX")
+cleanup()
+{
+    rm -f -- "$expected"
+}
+trap cleanup 0
+trap 'exit 129' 1
+trap 'exit 130' 2
+trap 'exit 143' 15
+
+{
+    printf '%s\n' 'cclsh-login-build-v1'
+    printf 'kernel-sha256 %s\n' "$kernel_hash"
+    printf 'image-sha256 %s\n' "$image_hash"
+    for patch in "$@"; do
+        if ! patch_hash=$(scripts/file-sha256 "$patch"); then
+            exit 1
+        fi
+        printf 'patch-sha256 %s %s\n' \
+            "$(basename "$patch")" \
+            "$patch_hash"
+    done
+} >"$expected"
+
+if ! cmp -s "$expected" "$attestation"; then
+    echo "cclsh attestation: artifact or required-patch hash mismatch" >&2
+    exit 1
+fi

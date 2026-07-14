@@ -1,0 +1,29 @@
+#!/bin/sh
+# Print a verified SHA-256 digest for one regular, non-symlink file.
+set -eu
+
+if [ "$#" -ne 1 ]; then
+    echo "usage: scripts/file-sha256 FILE" >&2
+    exit 2
+fi
+file=$1
+if [ ! -f "$file" ] || [ -L "$file" ] || [ ! -r "$file" ]; then
+    echo "cclsh hash: not a readable regular file: $file" >&2
+    exit 1
+fi
+if ! output=$(LC_ALL=C sha256sum -- "$file"); then
+    echo "cclsh hash: could not hash file: $file" >&2
+    exit 1
+fi
+digest=${output%% *}
+if [ "${#digest}" -ne 64 ]; then
+    echo "cclsh hash: sha256sum returned an invalid digest: $file" >&2
+    exit 1
+fi
+case "$digest" in
+    *[!0123456789abcdef]*)
+        echo "cclsh hash: sha256sum returned an invalid digest: $file" >&2
+        exit 1
+        ;;
+esac
+printf '%s\n' "$digest"

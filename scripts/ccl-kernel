@@ -1,0 +1,37 @@
+#!/bin/sh
+# Apply cclsh's mandatory CCL patches and perform a clean kernel build.
+set -eu
+cd "$(dirname "$0")/.."
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
+unset GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
+if ! scripts/build-lock-held; then
+    exec scripts/with-build-lock scripts/ccl-kernel "$@"
+fi
+if [ "$#" -ne 1 ]; then
+    echo "usage: scripts/ccl-kernel CCL-SOURCE" >&2
+    exit 2
+fi
+
+ccl_source=$(realpath -e "$1")
+if ! scripts/ccl-lock-held "$ccl_source"; then
+    exec scripts/with-ccl-lock \
+        "$ccl_source" scripts/ccl-kernel "$ccl_source"
+fi
+set -- patches/ccl-linux-xstate.patch patches/ccl-cclsh-argv.patch
+for patch in "$@"; do
+    patch_path=$PWD/$patch
+    if git -C "$ccl_source" apply --reverse --check "$patch_path" \
+         >/dev/null 2>&1
+    then
+        echo "CCL patch is already applied: $patch"
+    elif git -C "$ccl_source" apply --check "$patch_path"; then
+        git -C "$ccl_source" apply "$patch_path"
+    else
+        echo "CCL source does not accept patch: $patch" >&2
+        exit 1
+    fi
+done
+
+make -C "$ccl_source/lisp-kernel/linuxx8664" clean
+make -C "$ccl_source/lisp-kernel/linuxx8664"

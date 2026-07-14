@@ -35,6 +35,24 @@ if ! command -v "$ccl_command" >/dev/null 2>&1; then
     echo "cclsh build: CCL executable not found: $ccl_command" >&2
     exit 1
 fi
+validation_timeout=${CCLSH_BUILD_VALIDATION_TIMEOUT:-30}
+case "$validation_timeout" in
+    ''|*[!0-9]*)
+        echo "cclsh build: validation timeout must be positive seconds" >&2
+        exit 2
+        ;;
+esac
+case "$validation_timeout" in
+    *[1-9]*) ;;
+    *)
+        echo "cclsh build: validation timeout must be positive seconds" >&2
+        exit 2
+        ;;
+esac
+if [ ! -x /usr/bin/timeout ]; then
+    echo "cclsh build: /usr/bin/timeout is required" >&2
+    exit 1
+fi
 set -- -n -b
 if [ -n "${CCLSH_CCL_IMAGE:-}" ]; then
     set -- -I "$CCLSH_CCL_IMAGE" "$@"
@@ -89,6 +107,8 @@ if ! (
      CCLSH_EXPECTED_CLINEDI_COMMIT="$expected_clinedi_commit" \
      LANG=C \
      LC_ALL=C \
+     /usr/bin/timeout --signal=TERM --kill-after=1 \
+     "$validation_timeout" \
      "$build_root/cclsh.new" -I "$build_root/cclsh.image.new" -c \
      '(let* ((quicklisp-package (find-package "QL"))
              (quickload
@@ -128,6 +148,28 @@ if ! (
      )
 then
     echo "cclsh build: staged saved-image validation failed" >&2
+    exit 1
+fi
+ln -s "$build_root/cclsh.new" "$validation_home/cclsh"
+set +e
+argument_probe=$(
+    HOME="$validation_home" \
+    CCLSH_SAFE=1 \
+    LANG=C \
+    LC_ALL=C \
+    /usr/bin/timeout --signal=TERM --kill-after=1 \
+    "$validation_timeout" \
+    "$validation_home/cclsh" -I "$build_root/cclsh.image.new" \
+    -c --no-avx 2>&1
+)
+argument_status=$?
+set -e
+if [ "$argument_status" -ne 127 ] ||
+   ! printf '%s\n' "$argument_probe" | grep -Fq -- '--no-avx'
+then
+    echo \
+        "cclsh build: CCL kernel does not preserve cclsh arguments" \
+        >&2
     exit 1
 fi
 release_id=$(

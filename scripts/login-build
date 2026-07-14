@@ -1,0 +1,35 @@
+#!/bin/sh
+# Build and attest one login-shell release as a serialized transaction.
+set -eu
+cd "$(dirname "$0")/.."
+
+if ! scripts/build-lock-held; then
+    exec scripts/with-build-lock scripts/login-build "$@"
+fi
+if [ "$#" -ne 3 ]; then
+    echo "usage: scripts/login-build CCL-SOURCE CCL ATTESTATION" >&2
+    exit 2
+fi
+
+ccl_source=$(realpath -e "$1")
+ccl_command=$2
+attestation=$3
+if ! scripts/ccl-lock-held "$ccl_source"; then
+    exec scripts/with-ccl-lock \
+        "$ccl_source" scripts/login-build \
+        "$ccl_source" "$ccl_command" "$attestation"
+fi
+if [ -z "${CCLSH_CCL_IMAGE:-}" ]; then
+    if [ -f "$ccl_source/lx86cl64.image" ]; then
+        CCLSH_CCL_IMAGE=$ccl_source/lx86cl64.image
+        export CCLSH_CCL_IMAGE
+    else
+        echo \
+            "cclsh login-build: set CCL_IMAGE to the CCL boot image" \
+            >&2
+        exit 2
+    fi
+fi
+scripts/ccl-kernel "$ccl_source"
+CCLSH_CCL="$ccl_command" scripts/build
+scripts/attest-build "$ccl_source" "$ccl_command" "$attestation"

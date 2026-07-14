@@ -1,0 +1,45 @@
+diff --git a/lisp-kernel/pmcl-kernel.c b/lisp-kernel/pmcl-kernel.c
+index 8fcac48a..4f1610e8 100644
+--- a/lisp-kernel/pmcl-kernel.c
++++ b/lisp-kernel/pmcl-kernel.c
+@@ -1257,3 +1257,15 @@ parse_numeric_option(char *arg, char *argname, natural default_val)
+ Boolean copy_exception_avx_state = false;
+-
++
++static Boolean
++cclsh_uses_prefix_options(const char *name)
++{
++  const char *base = strrchr(name, '/');
++
++  base = base ? base + 1 : name;
++  if (*base == '-') {
++    base++;
++  }
++  return strcmp(base, "cclsh") == 0;
++}
++
+ void
+@@ -1261,3 +1273,4 @@ process_options(int argc, char *argv[], wchar_t *shadow[])
+ {
+   int i, j, k, num_elide, flag, arg_error;
++  Boolean prefix_options = cclsh_uses_prefix_options(argv[0]);
+   char *arg, *val;
+@@ -1274,4 +1287,8 @@ process_options(int argc, char *argv[], wchar_t *shadow[])
+     arg_error = 0;
+     if (*arg != '-') {
+-      i++;
++      if (prefix_options) {
++        break;
++      } else {
++        i++;
++      }
+     } else {
+@@ -1412,3 +1429,7 @@ process_options(int argc, char *argv[], wchar_t *shadow[])
+       } else {
+-	i++;
++	if (prefix_options) {
++	  break;
++	} else {
++	  i++;
++	}
+       }
