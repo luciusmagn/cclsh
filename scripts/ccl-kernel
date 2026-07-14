@@ -1,5 +1,5 @@
 #!/bin/sh
-# Apply cclsh's mandatory CCL patches and perform a clean kernel build.
+# Verify or apply cclsh's attested CCL changes and build a clean kernel.
 set -eu
 cd "$(dirname "$0")/.."
 unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE

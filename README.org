@@ -22,8 +22,8 @@ cclsh --version
 #+end_src
 
 From a checkout, use =nix run .= or =nix profile install .#cclsh=. The flake
-rebuilds CCL 1.13 with both required kernel patches, fetches the exact Clinedi
-revision in =dependencies.lock=, and includes a pinned Quicklisp client and
+rebuilds CCL 1.13 from the exact downstream CCL commits and Clinedi revision
+recorded in =dependencies.lock=, and includes a pinned Quicklisp client and
 distribution index. =nix flake check= builds the complete package and checks
 its command boundary and installed Quicklisp state.
 
@@ -86,12 +86,14 @@ scripts/check
 (cclsh:main)
 #+end_src
 
-A standalone saved image additionally requires a rebuilt CCL kernel containing
-=ccl-cclsh-argv.patch=. The supported manual path applies both repository
-patches to an official CCL 1.13 source checkout:
+A standalone saved image additionally requires the two downstream CCL changes.
+They live as commits in the [[https://github.com/luciusmagn/ccl][LuciusMagn CCL
+fork]], based on [[https://github.com/Clozure/ccl][Clozure CL]] 1.13. Clone
+the fork and select the exact final revision:
 
 #+begin_src sh
-git clone --branch v1.13 https://github.com/Clozure/ccl.git ../ccl
+git clone git@github.com:luciusmagn/ccl.git ../ccl
+git -C ../ccl checkout --detach 579c87300ee632af99182276f2ad40e1c38c5d0a
 make ccl-kernel CCL_SOURCE=../ccl
 make build CCL=../ccl/lx86cl64 \
   CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
@@ -99,11 +101,12 @@ make install BINDIR="$HOME/.local/bin"
 #+end_src
 
 The boot image path is distribution-specific and must match the CCL source
-generation. =ccl-kernel= patches the supplied checkout in place and leaves the
-tracked changes for inspection. =ccl-cclsh-argv.patch= preserves cclsh command
-and script operands. =ccl-linux-xstate.patch= validates and copies the complete
-aligned Linux x86-64 signal state; see CCL issue 85 and upstream commit
-=b1a59e443344f6f79d1069e1902de5d04c14e2e3= for the original diagnosis.
+generation. At the selected fork revision, =ccl-kernel= recognizes both
+changes as already applied and builds them. The files under =patches/= are
+byte-stable mirrors retained because login-build attestation hashes their exact
+contents. Nix fetches immutable diffs for the exact fork commits instead of
+following a branch. [[file:patches/README.org][The patch ledger]] records
+their hashes, provenance, validation and upstream status.
 
 =make build= produces a matched =cclsh= kernel and =cclsh.image= in the
 repository. It intentionally rejects stock CCL with
@@ -133,8 +136,8 @@ make integration-check CCL=../ccl/lx86cl64 \
 sudo make install-login-shell LOGIN_USER=USER
 #+end_src
 
-=login-build= applies both patches, performs a clean CCL kernel build through
-that exact checkout, publishes the saved image, and writes
+=login-build= verifies both downstream changes, performs a clean CCL kernel
+build through that exact checkout, publishes the saved image, and writes
 =cclsh.attestation= over the patch and artifact hashes. Do not run a plain
 =scripts/build= afterward because a non-login build removes the attestation.
 

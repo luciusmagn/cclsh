@@ -334,9 +334,9 @@ its stale hook and command bindings.")
   nix profile install github:luciusmagn/cclsh
 
 From a checkout, use nix run . or nix profile install .#cclsh. The flake
-rebuilds CCL 1.13 with both kernel patches, fetches the exact Clinedi lock
-revision, and includes pinned Quicklisp metadata. nix flake check builds and
-tests the installed result.
+rebuilds CCL 1.13 from the exact downstream CCL commits and Clinedi revision
+in dependencies.lock, and includes pinned Quicklisp metadata. nix flake check
+builds and tests the installed result.
 
 The package uses an existing ~/quicklisp or initializes a writable tree below
 ${XDG_DATA_HOME:-$HOME/.local/share}/cclsh/quicklisp. Override it with
@@ -345,10 +345,18 @@ unwritable targets are reported and refused. Interactive and configured
 sessions load local-init files, while plain commands, scripts and safe mode do
 not. The flake does not edit /etc/shells or run chsh.
 
-Source checks can use stock CCL. A standalone saved image cannot: run
-make ccl-kernel against CCL 1.13, then select that rebuilt lx86cl64 and its
-matching boot image for make build. README.org has the complete source and
-login installation sequences.")
+Source checks can use stock CCL. For a standalone saved image, select the exact
+downstream CCL revision:
+
+  git clone git@github.com:luciusmagn/ccl.git ../ccl
+  git -C ../ccl checkout --detach 579c87300ee632af99182276f2ad40e1c38c5d0a
+  make ccl-kernel CCL_SOURCE=../ccl
+
+The fork is based on https://github.com/Clozure/ccl. Local files under
+patches/ are byte-stable attestation mirrors. Nix fetches immutable diffs for
+the exact fork commits. Select the rebuilt lx86cl64 and its matching boot image
+for make build. README.org has the complete source and login installation
+sequences.")
 
     ("scripting" "one-shots, scripts and shebangs"
      "Three non-interactive modes, all skipping startup.lisp and
