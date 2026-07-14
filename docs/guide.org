@@ -442,6 +442,10 @@ Clinedi provides the Unicode-aware editing state, key decoding and terminal
 repaint loop. cclsh supplies shell completion, highlighting, history and prompt
 policy through its callbacks.
 
+Starship renders the configured prompt when available. If it is missing or
+fails, cclsh's built-in prompt begins with =username@hostname= and then shows
+the current directory and status sigil.
+
 | Key                 | Action                              |
 |---------------------+-------------------------------------|
 | Tab                 | complete commands, files or symbols |

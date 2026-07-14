@@ -55,6 +55,17 @@
              (clinedi:text-cell-width "猫"))
 
 
+;;;; -- Prompt fallback --
+
+(let* ((identity (format nil "~a@~a"
+                         (cclsh::prompt--username)
+                         (cclsh::prompt--hostname)))
+       (prompt   (cclsh::ansi-strip (cclsh::prompt-fallback))))
+  (check-equal "fallback prompt begins with username and hostname"
+               0
+               (search identity prompt)))
+
+
 ;;;; -- Command line arguments --
 
 (dolist (case

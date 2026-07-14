@@ -227,6 +227,10 @@ prefix, and typing keeps the selected candidate before inserting. The newest
 history entry beginning with the current input appears in dim text; Right or
 C-f at the end accepts it.
 
+Starship renders the configured prompt when available. If it is missing or
+fails, the built-in prompt begins with username@hostname and then shows the
+current directory and status sigil.
+
   Left/Right C-b/C-f   move/accept   Ctrl-arrows move by word
   Up/Down C-p/C-n      history       C-w/C-h     kill word
   Home/End C-a/C-e     line ends     C-k/C-u     kill rest/line

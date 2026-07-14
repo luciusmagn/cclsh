@@ -6,6 +6,29 @@
 
 (in-package #:cclsh)
 
+(defun prompt--username ()
+  "Return the operating-system name of the effective user."
+  (let ((uid (external-call "geteuid" :unsigned-int)))
+    (or (ignore-errors
+          ;; getpwuid returns a passwd structure whose first field is pw_name.
+          ;; Copy the static result while this Lisp thread cannot be interrupted.
+          (ccl:without-interrupts
+            (let ((entry (external-call "getpwuid"
+                                        :unsigned-int uid
+                                        :address)))
+              (unless (ccl:%null-ptr-p entry)
+                (let ((name (ccl:%get-ptr entry)))
+                  (unless (ccl:%null-ptr-p name)
+                    (ccl::%get-utf-8-cstring name)))))))
+        (format nil "~d" uid))))
+
+(defun prompt--hostname ()
+  "Return the operating-system hostname, with a stable fallback."
+  (let ((hostname (ignore-errors (machine-instance))))
+    (if (and (stringp hostname) (plusp (length hostname)))
+        hostname
+        "localhost")))
+
 (defun prompt-starship (status duration-milliseconds columns)
   "Ask starship to render a prompt. Returns the prompt string or NIL
    when starship is unavailable or fails."
@@ -35,7 +58,10 @@
 
 (defun prompt-fallback ()
   "Render a simple colored prompt used when starship is missing."
-  (let* ((directory (string-right-trim "/" (namestring (current-directory))))
+  (let* ((identity  (format nil "~a@~a"
+                            (prompt--username)
+                            (prompt--hostname)))
+         (directory (string-right-trim "/" (namestring (current-directory))))
          (home      (home-directory))
          (shortened (cond ((string= directory home)
                            "~")
@@ -47,7 +73,8 @@
                            "/")
                           (t
                            directory))))
-    (format nil "~a ~a "
+    (format nil "~a ~a ~a "
+            (ansi-colorize identity ':cyan :bold t)
             (ansi-colorize shortened ':green :bold t)
             (ansi-colorize "$" (if (zerop *last-status*) ':white ':red)))))
 
