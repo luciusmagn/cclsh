@@ -12,7 +12,7 @@ if [ ! -s ./cclsh.image ]; then
     exit 2
 fi
 
-for program in ccl script setsid timeout pkill ps tr grep stty seq yes head wc cat sleep
+for program in script setsid timeout pkill ps tr grep stty seq yes head wc cat sleep
 do
     if ! command -v "$program" >/dev/null 2>&1; then
         echo "cclsh integration: required program not found: $program" >&2
@@ -56,7 +56,16 @@ then
     exit 2
 fi
 
-exec ccl -n -b \
+ccl_command=${CCLSH_CCL:-ccl}
+if ! command -v "$ccl_command" >/dev/null 2>&1; then
+    echo "cclsh integration: CCL executable not found: $ccl_command" >&2
+    exit 1
+fi
+set -- -n -b
+if [ -n "${CCLSH_CCL_IMAGE:-}" ]; then
+    set -- -I "$CCLSH_CCL_IMAGE" "$@"
+fi
+"$ccl_command" "$@" \
     -e '(setf ccl:*default-file-character-encoding* :utf-8)' \
     -e \
     '(handler-case
@@ -65,3 +74,5 @@ exec ccl -n -b \
          (format *error-output*
                  "cclsh integration loader failed: ~a~%" condition)
          (ccl:quit 1)))'
+
+tests/installed-image.sh

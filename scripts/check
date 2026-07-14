@@ -13,7 +13,16 @@ if [ -z "${ASDF_OUTPUT_TRANSLATIONS:-}" ]; then
     export ASDF_OUTPUT_TRANSLATIONS
 fi
 
-exec ccl -n -b \
+ccl_command=${CCLSH_CCL:-ccl}
+if ! command -v "$ccl_command" >/dev/null 2>&1; then
+    echo "cclsh check: CCL executable not found: $ccl_command" >&2
+    exit 1
+fi
+set -- -n -b
+if [ -n "${CCLSH_CCL_IMAGE:-}" ]; then
+    set -- -I "$CCLSH_CCL_IMAGE" "$@"
+fi
+"$ccl_command" "$@" \
     -e '(setf ccl:*default-file-character-encoding* :utf-8)' \
     -e '(require :asdf)' \
     -e \
@@ -54,3 +63,7 @@ exec ccl -n -b \
        (serious-condition (condition)
          (format *error-output* "cclsh check loader failed: ~a~%" condition)
          (ccl:quit 1)))'
+
+tests/argument-boundary.sh
+tests/build-state-rollback.sh
+tests/install.sh

@@ -1,0 +1,421 @@
+#!/bin/sh
+# Validate a cclsh installation and add its exact executable path to a
+# shells file. The default is the system /etc/shells.
+set -eu
+
+if [ "$#" -gt 3 ]; then
+    echo \
+        "usage: scripts/register-shell [cclsh-path] [shells-file] [probe-user]" \
+        >&2
+    exit 2
+fi
+
+shell_path=${1:-"${CCLSH_SHELL_PATH:-$HOME/.local/bin/cclsh}"}
+shells_file=${2:-"${CCLSH_SHELLS_FILE:-/etc/shells}"}
+probe_user=${3:-"${CCLSH_PROBE_USER:-}"}
+probe_timeout=${CCLSH_PROBE_TIMEOUT:-10}
+probe_kill_after=${CCLSH_PROBE_KILL_AFTER:-2}
+lock_timeout=${CCLSH_LOCK_TIMEOUT:-30}
+
+require_positive_seconds()
+{
+    seconds_value=$1
+    seconds_label=$2
+    if ! LC_ALL=C awk -v value="$seconds_value" 'BEGIN {
+             exit ! (value ~ /^[0-9]+([.][0-9]+)?$/ && value + 0 > 0)
+         }'
+    then
+        echo \
+            "cclsh register-shell: $seconds_label must be positive seconds" \
+            >&2
+        exit 2
+    fi
+}
+require_positive_seconds "$probe_timeout" "probe timeout"
+require_positive_seconds "$probe_kill_after" "probe kill timeout"
+require_positive_seconds "$lock_timeout" "lock timeout"
+
+if [ -n "$probe_user" ]; then
+    if ! probe_uid=$(timeout -k "$probe_kill_after" "$probe_timeout" \
+         id -u "$probe_user")
+    then
+        echo "cclsh register-shell: could not resolve the probe user" >&2
+        exit 1
+    fi
+    if [ "$probe_uid" -eq 0 ]; then
+        echo "cclsh register-shell: probe user must not be root" >&2
+        exit 1
+    fi
+fi
+case "$shell_path" in
+    /*) ;;
+    *)
+        echo "cclsh register-shell: shell path must be absolute" >&2
+        exit 2
+        ;;
+esac
+case "$shell_path" in
+    *[[:space:]]*)
+        echo "cclsh register-shell: shell path contains whitespace" >&2
+        exit 2
+        ;;
+esac
+case "$shells_file" in
+    /*) ;;
+    *)
+        echo "cclsh register-shell: shells file must be absolute" >&2
+        exit 2
+        ;;
+esac
+
+shell_directory=$(dirname "$shell_path")
+canonical_shell_directory=$(realpath -e -- "$shell_directory")
+canonical_shell_path="$canonical_shell_directory/$(basename "$shell_path")"
+if [ "$shell_path" != "$canonical_shell_path" ]; then
+    echo "cclsh register-shell: shell path is not canonical" >&2
+    exit 2
+fi
+if [ ! -e "$shell_path" ] && [ ! -L "$shell_path" ]; then
+    echo "cclsh register-shell: shell does not exist: $shell_path" >&2
+    exit 1
+fi
+resolved_shell_path=$(realpath -e -- "$shell_path")
+image_path=$resolved_shell_path.image
+
+shells_directory=$(dirname "$shells_file")
+canonical_shells_directory=$(realpath -e -- "$shells_directory")
+canonical_shells_file="$canonical_shells_directory/$(basename "$shells_file")"
+if [ "$shells_file" != "$canonical_shells_file" ]; then
+    echo "cclsh register-shell: shells file path is not canonical" >&2
+    exit 2
+fi
+if [ -e "$canonical_shells_file" ] &&
+   { [ ! -f "$canonical_shells_file" ] || [ -L "$canonical_shells_file" ]; }
+then
+    echo "cclsh register-shell: expected a regular shells file" >&2
+    exit 1
+fi
+
+for artifact in "$resolved_shell_path" "$image_path"; do
+    if [ ! -f "$artifact" ] || [ -L "$artifact" ]; then
+        echo "cclsh register-shell: expected a regular file: $artifact" >&2
+        exit 1
+    fi
+    if [ -n "$(find "$artifact" -prune -perm /022 -print -quit)" ]; then
+        echo "cclsh register-shell: artifact is group/world writable: $artifact" >&2
+        exit 1
+    fi
+done
+if [ ! -x "$resolved_shell_path" ]; then
+    echo "cclsh register-shell: shell is not executable: $shell_path" >&2
+    exit 1
+fi
+if [ ! -r "$image_path" ]; then
+    echo "cclsh register-shell: image is not readable: $image_path" >&2
+    exit 1
+fi
+
+kernel_mode=$(stat -Lc %a "$resolved_shell_path")
+if [ $((0$kernel_mode & 1)) -eq 0 ]; then
+    echo "cclsh register-shell: shell is not executable by login users" >&2
+    exit 1
+fi
+
+directory-chain-check()
+{
+    checked_directory=$(dirname "$1")
+    while :; do
+        if [ ! -d "$checked_directory" ] || [ -L "$checked_directory" ]; then
+            echo \
+                "cclsh register-shell: system path is not a directory:" \
+                "$checked_directory" \
+                >&2
+            exit 1
+        fi
+        if [ "$(stat -c %u "$checked_directory")" -ne 0 ]; then
+            echo \
+                "cclsh register-shell: system directory is not root-owned:" \
+                "$checked_directory" \
+                >&2
+            exit 1
+        fi
+        if [ -n "$(
+            find "$checked_directory" -prune -perm /022 -print -quit
+        )" ]; then
+            echo \
+                "cclsh register-shell: system directory is writable:" \
+                "$checked_directory" \
+                >&2
+            exit 1
+        fi
+        checked_mode=$(stat -c %a "$checked_directory")
+        if [ $((0$checked_mode & 0100)) -eq 0 ]; then
+            echo \
+                "cclsh register-shell: system directory is not traversable:" \
+                "$checked_directory" \
+                >&2
+            exit 1
+        fi
+        if [ "$checked_directory" = / ]; then
+            break
+        fi
+        checked_directory=$(dirname "$checked_directory")
+    done
+}
+
+running_uid=$(id -u)
+if [ "$canonical_shells_file" = /etc/shells ]; then
+    if [ "$running_uid" -ne 0 ]; then
+        echo "cclsh register-shell: updating /etc/shells requires root" >&2
+        exit 1
+    fi
+    if [ -z "$probe_user" ]; then
+        echo \
+            "cclsh register-shell: a non-root probe user is required for /etc/shells" \
+            >&2
+        exit 1
+    fi
+fi
+
+if [ "$running_uid" -eq 0 ]; then
+    if [ -f "$canonical_shells_file" ]; then
+        if [ "$(stat -c %u "$canonical_shells_file")" -ne 0 ]; then
+            echo "cclsh register-shell: shells file is not root-owned" >&2
+            exit 1
+        fi
+        if [ -n "$(
+            find "$canonical_shells_file" -prune -perm /022 -print -quit
+        )" ]; then
+            echo "cclsh register-shell: shells file is writable by non-root" >&2
+            exit 1
+        fi
+    fi
+    for artifact in "$shell_path" "$resolved_shell_path" "$image_path"; do
+        if [ "$(stat -c %u "$artifact")" -ne 0 ]; then
+            echo \
+                "cclsh register-shell: system artifact is not root-owned: $artifact" \
+                >&2
+            exit 1
+        fi
+    done
+    directory-chain-check "$canonical_shells_file"
+    directory-chain-check "$shell_path"
+    directory-chain-check "$resolved_shell_path"
+    scratch_parent=/run
+    directory-chain-check "$scratch_parent/cclsh-register"
+else
+    scratch_parent=${TMPDIR:-/tmp}
+fi
+
+validation_home=$(mktemp -d "$scratch_parent/cclsh-register.XXXXXX")
+temporary_file=
+backup_directory=
+backup_file=
+preserve_backup=0
+cleanup()
+{
+    rm -rf -- "$validation_home"
+    if [ -n "$temporary_file" ]; then
+        rm -f -- "$temporary_file"
+    fi
+    if [ -n "$backup_directory" ] && [ "$preserve_backup" -eq 0 ]; then
+        rm -rf -- "$backup_directory"
+    fi
+}
+trap cleanup 0
+trap 'exit 129' 1
+trap 'exit 130' 2
+trap 'exit 143' 15
+
+if [ -n "$probe_user" ]; then
+    if ! probe_gid=$(timeout -k "$probe_kill_after" "$probe_timeout" \
+         id -g "$probe_user")
+    then
+        echo "cclsh register-shell: could not resolve the probe group" >&2
+        exit 1
+    fi
+    chown "$probe_uid:$probe_gid" "$validation_home"
+    if ! timeout -k "$probe_kill_after" "$probe_timeout" \
+         runuser -u "$probe_user" -- \
+         test -x "$resolved_shell_path"
+    then
+        echo "cclsh register-shell: probe user cannot execute the shell" >&2
+        exit 1
+    fi
+    if ! timeout -k "$probe_kill_after" "$probe_timeout" \
+         runuser -u "$probe_user" -- test -r "$image_path"
+    then
+        echo "cclsh register-shell: probe user cannot read the image" >&2
+        exit 1
+    fi
+fi
+probe()
+{
+    (
+        cd "$validation_home"
+        if [ -n "$probe_user" ]; then
+            timeout -k "$probe_kill_after" "$probe_timeout" \
+                runuser -u "$probe_user" -- env -i \
+                HOME="$validation_home" \
+                XDG_CONFIG_HOME="$validation_home/.config" \
+                PATH=/usr/local/bin:/usr/bin:/bin \
+                SHELL="$shell_path" \
+                CCLSH_SAFE=1 \
+                LANG=C \
+                LC_ALL=C \
+                "$shell_path" "$@"
+        else
+            timeout -k "$probe_kill_after" "$probe_timeout" env -i \
+                HOME="$validation_home" \
+                XDG_CONFIG_HOME="$validation_home/.config" \
+                PATH=/usr/local/bin:/usr/bin:/bin \
+                SHELL="$shell_path" \
+                CCLSH_SAFE=1 \
+                LANG=C \
+                LC_ALL=C \
+                "$shell_path" "$@"
+        fi
+    )
+}
+probe --version >/dev/null
+probe -c 'exit 0'
+
+lock_file=${CCLSH_SHELLS_LOCK_FILE:-"$canonical_shells_file.lock"}
+case "$lock_file" in
+    /*) ;;
+    *)
+        echo "cclsh register-shell: lock path must be absolute" >&2
+        exit 2
+        ;;
+esac
+lock_directory=$(dirname "$lock_file")
+canonical_lock_directory=$(realpath -e -- "$lock_directory")
+canonical_lock_file="$canonical_lock_directory/$(basename "$lock_file")"
+if [ ! -d "$canonical_lock_directory" ]; then
+    echo "cclsh register-shell: lock parent is not a directory" >&2
+    exit 1
+fi
+if [ "$lock_file" != "$canonical_lock_file" ]; then
+    echo "cclsh register-shell: lock path is not canonical" >&2
+    exit 2
+fi
+if [ "$canonical_lock_file" = "$canonical_shells_file" ] ||
+   { [ -e "$canonical_lock_file" ] &&
+     [ -e "$canonical_shells_file" ] &&
+     [ "$canonical_lock_file" -ef "$canonical_shells_file" ]; }
+then
+    echo "cclsh register-shell: lock aliases the shells file" >&2
+    exit 1
+fi
+if [ "$running_uid" -eq 0 ]; then
+    directory-chain-check "$canonical_lock_file"
+fi
+if [ -e "$lock_file" ] || [ -L "$lock_file" ]; then
+    if [ ! -f "$lock_file" ] || [ -L "$lock_file" ]; then
+        echo "cclsh register-shell: lock is not a regular file" >&2
+        exit 1
+    fi
+else
+    (umask 077; : >"$lock_file")
+fi
+if [ "$running_uid" -eq 0 ] &&
+   { [ "$(stat -c %u "$lock_file")" -ne 0 ] ||
+     [ -n "$(find "$lock_file" -prune -perm /022 -print -quit)" ]; }
+then
+    echo "cclsh register-shell: lock has unsafe metadata" >&2
+    exit 1
+fi
+chmod 600 "$lock_file"
+exec 9<>"$lock_file"
+if ! flock -w "$lock_timeout" 9; then
+    echo "cclsh register-shell: timed out waiting for registration" >&2
+    exit 1
+fi
+
+if [ -f "$canonical_shells_file" ] &&
+   grep -Fqx -- "$shell_path" "$canonical_shells_file"
+then
+    echo "Already registered $shell_path in $canonical_shells_file"
+    exit 0
+fi
+
+previous_shells_kind=missing
+if [ -f "$canonical_shells_file" ]; then
+    backup_directory=$(
+        mktemp -d "$scratch_parent/cclsh-register-backup.XXXXXX"
+    )
+    backup_file=$backup_directory/shells
+    cp --preserve=all -- "$canonical_shells_file" "$backup_file"
+    sync -f "$backup_file"
+    previous_shells_kind=file
+fi
+temporary_file=$(mktemp "$canonical_shells_directory/.shells.XXXXXX")
+if [ -f "$canonical_shells_file" ]; then
+    cp --preserve=all -- "$canonical_shells_file" "$temporary_file"
+else
+    chmod 644 "$temporary_file"
+fi
+if [ -s "$temporary_file" ]; then
+    last_byte=$(tail -c 1 "$temporary_file" | od -An -tu1 | tr -d ' ')
+    if [ "$last_byte" != 10 ]; then
+        printf '\n' >>"$temporary_file"
+    fi
+fi
+printf '%s\n' "$shell_path" >>"$temporary_file"
+sync -f "$temporary_file"
+trap '' 1 2 15
+mv -Tf -- "$temporary_file" "$canonical_shells_file"
+temporary_file=
+
+restore_shells_file()
+{
+    case "$previous_shells_kind" in
+        file)
+            if ! temporary_file=$(
+                mktemp "$canonical_shells_directory/.shells-restore.XXXXXX"
+            ); then
+                temporary_file=
+                return 1
+            fi
+            if ! cp --preserve=all -- "$backup_file" "$temporary_file" ||
+               ! sync -f "$temporary_file" ||
+               ! mv -Tf -- "$temporary_file" "$canonical_shells_file"
+            then
+                return 1
+            fi
+            temporary_file=
+            ;;
+        missing)
+            if ! rm -f -- "$canonical_shells_file"; then
+                return 1
+            fi
+            ;;
+    esac
+    sync -f "$canonical_shells_directory"
+}
+
+if ! sync -f "$canonical_shells_directory"; then
+    echo \
+        "cclsh register-shell: registration durability could not be confirmed" \
+        >&2
+    if ! restore_shells_file; then
+        preserve_backup=1
+        echo \
+            "cclsh register-shell: could not restore the shells file" \
+            >&2
+        if [ -n "$backup_file" ]; then
+            echo \
+                "cclsh register-shell: preserved recovery file: $backup_file" \
+                >&2
+        fi
+    fi
+    exit 1
+fi
+
+trap - 0 1 2 15
+rm -rf -- "$validation_home" || true
+if [ -n "$backup_directory" ]; then
+    rm -rf -- "$backup_directory" || true
+fi
+printf 'Registered %s in %s\n' "$shell_path" "$canonical_shells_file" || true
+exit 0
