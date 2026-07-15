@@ -404,8 +404,15 @@ README.org has the complete source and system installation sequence.")
 history:
 
   cclsh -c 'echo one shot'        one command string
-  cclsh provision.cclsh           a script file
+  cclsh provision.sh.lisp         a script file
   cclsh < input                   piped standard input
+
+By convention, scripts are named NAME.sh.lisp. This canonical suffix is
+not required: extensionless scripts and existing names still run. The
+final .lisp keeps the file recognizable to Lisp tooling, while .sh marks
+shell-oriented code. Command lines and shebangs can still make it
+cclsh-specific rather than portable Common Lisp source that load can read
+directly.
 
 Load startup.lisp, but not history, for a configured one-shot:
 
@@ -436,7 +443,7 @@ Script files work as shebang interpreters:
 after it, and is NIL outside script mode. Arguments beginning with a dash
 remain script data. Use -- before a dash-prefixed script path:
 
-  cclsh -- -provision.cclsh alpha
+  cclsh -- -provision.sh.lisp alpha
 
 Keep the executable basename cclsh. The patched CCL kernel recognizes that
 name when preserving command and script arguments.

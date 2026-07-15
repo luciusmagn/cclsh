@@ -266,6 +266,12 @@ CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
   system-visible wrapper. Add =l= or =i= to command mode, such as
   =cclsh -lc command=, to load =startup.lisp= first. Short flags combine
   in any order. =CCLSH_SAFE=1= always skips startup.lisp and history.
+- By convention, cclsh scripts are named =NAME.sh.lisp=. This canonical
+  compound suffix is not a runtime requirement; extensionless scripts and
+  existing names still run. The final =.lisp= keeps the file recognizable to
+  Lisp tooling, while =.sh= marks it as shell-oriented code. Command-mode
+  lines and shebangs can still make it cclsh-specific rather than portable
+  Common Lisp source that =load= can read directly.
 - =cclsh help= prints the same built-in manual as =help= at the interactive
   prompt, and =cclsh help SECTION= prints one or more sections. These manual
   requests load no startup or history. Use =cclsh -- help= or =cclsh ./help=
@@ -273,7 +279,7 @@ CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
 - Scripts receive =*argv*= as a list containing the script path followed by
   every argument after it. Arguments are preserved literally and are not
   parsed as cclsh options. It is =nil= outside script mode. Use
-  =cclsh -- -script.cclsh argument= for a dash-prefixed script path. Keep the
+  =cclsh -- -script.sh.lisp argument= for a dash-prefixed script path. Keep the
   executable basename =cclsh=, as the CCL kernel uses that name to recognize
   cclsh's argument boundary.
 - Environment variables are lispy: =(setenv 'editor "vim")=,

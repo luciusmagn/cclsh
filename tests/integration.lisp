@@ -795,20 +795,20 @@ exit 0
          (startup          (concatenate 'string config "startup.lisp"))
          (history          (concatenate 'string config "history"))
          (script           (integration-path
-                            "argument mode 猫 script.cclsh"))
+                            "argument mode 猫 script.sh.lisp"))
          (help-script-name "help")
          (help-script      (integration-path help-script-name))
          (dash-script-name "--no-avx")
          (dash-script      (integration-path dash-script-name))
          (comment-status-script
-           (integration-path "comment status script.cclsh"))
+           (integration-path "comment status script.sh.lisp"))
          (shebang-script   (concatenate
                             'string *integration-bin-directory*
-                            "shebang argument mode 猫.cclsh"))
+                            "shebang argument mode 猫.sh.lisp"))
          (login-program    (concatenate 'string
                                         *integration-bin-directory*
                                         "login-cclsh"))
-         (pipe-input       (integration-path "argument-mode-input.cclsh"))
+         (pipe-input       (integration-path "argument-mode-input.sh.lisp"))
          (history-text     "__ARGUMENT_MODE_HISTORY_SHOULD_NOT_LOAD__")
          (script-arguments '("" "-lc" "echo not-executed" "sp ace"
                              "猫 λ" "--no-avx" "--stack-size"
@@ -864,7 +864,7 @@ false
      (format nil "(format t \"__HELP_SCRIPT_EXECUTED__~~%\")~%"))
     (integration-write-file dash-script script-contents)
     (integration-write-program
-     "shebang argument mode 猫.cclsh"
+     "shebang argument mode 猫.sh.lisp"
      (format nil "#!~a~%~a" *integration-binary* script-contents))
     (integration-write-file
      pipe-input
@@ -1512,7 +1512,7 @@ false
                                program-name))
          (script
            (integration-write-file
-            (integration-path "skript-žluť-你好.cclsh")
+            (integration-path "skript-žluť-你好.sh.lisp")
             (format nil "(progn (write-line ~s) (values))~%exit 0~%"
                     (concatenate 'string "__UTF8_SCRIPT__" text))))
          (form
@@ -1870,7 +1870,7 @@ false
   "Require orderly exit to hang up running and confirmed stopped jobs."
   (let* ((running-input
            (integration-write-file
-            (integration-path "exit-running.cclsh")
+            (integration-path "exit-running.sh.lisp")
             (format nil "exit-observer running &~%sleep 1~%")))
          (running-result
            (integration-run-arguments nil :input running-input :timeout 5)))
@@ -1878,7 +1878,7 @@ false
     (integration-check-exit-observer "running"))
   (let* ((stopped-input
            (integration-write-file
-            (integration-path "exit-stopped.cclsh")
+            (integration-path "exit-stopped.sh.lisp")
             (format nil "exit-observer stopped stopped &~%~
                          sleep 1~%exit~%exit 0~%")))
          (stopped-result

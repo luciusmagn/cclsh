@@ -196,6 +196,11 @@
 
 ;;;; -- Command line arguments --
 
+(let ((pathname (pathname "deploy.sh.lisp")))
+  (check-equal "canonical script suffix remains a Lisp pathname"
+               '("deploy.sh" "lisp")
+               (list (pathname-name pathname) (pathname-type pathname))))
+
 (dolist (case
           '(("plain command mode" ("-c" "echo plain")
              (:command "echo plain" nil nil))
@@ -235,17 +240,17 @@
              (:main nil nil nil))
             ("configuration flags without command" ("-lix")
              (:main nil t nil))
-            ("long option is not a short group" ("--lc" "script.cclsh")
-             (:script "script.cclsh" nil nil))
-            ("uppercase C remains unknown" ("-C" "script.cclsh")
-             (:script "script.cclsh" nil nil))
+            ("long option is not a short group" ("--lc" "script.sh.lisp")
+             (:script "script.sh.lisp" nil nil))
+            ("uppercase C remains unknown" ("-C" "script.sh.lisp")
+             (:script "script.sh.lisp" nil nil))
             ("script stops option parsing"
-             ("script.cclsh" "-lc" "echo not-executed")
-             (:script "script.cclsh" nil
+             ("script.sh.lisp" "-lc" "echo not-executed")
+             (:script "script.sh.lisp" nil
               ("-lc" "echo not-executed")))
             ("double dash permits a dash-prefixed script"
-             ("--" "-script.cclsh" "--help")
-             (:script "-script.cclsh" nil ("--help")))
+             ("--" "-script.sh.lisp" "--help")
+             (:script "-script.sh.lisp" nil ("--help")))
             ("double dash permits a script named help"
              ("--" "help" "scripting")
              (:script "help" nil ("scripting")))

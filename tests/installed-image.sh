@@ -92,7 +92,7 @@ if [ "$login_shell" != "$shell_path" ]; then
     exit 1
 fi
 
-script_path=$temporary_directory/installed-argv.cclsh
+script_path=$temporary_directory/installed-argv.sh.lisp
 printf '%s\n' \
     '(progn (format t "__INSTALLED_ARGV__~s__~%" *argv*) (values))' \
     >"$script_path"

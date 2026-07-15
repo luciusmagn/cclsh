@@ -664,11 +664,18 @@ scripts run. The embedded template contains only the Quicklisp client and
 distribution metadata, never the builder's local init, configuration, caches
 or downloaded systems.
 
+By convention, cclsh scripts are named =NAME.sh.lisp=. This is the canonical
+compound suffix, not a runtime requirement; extensionless scripts and existing
+names continue to run. The final =.lisp= keeps the file recognizable to Lisp
+tooling, while =.sh= marks it as shell-oriented code. Command-mode lines and
+shebangs can still make it cclsh-specific rather than portable Common Lisp
+source that =load= can read directly.
+
 Scripts run three ways, all skipping =startup.lisp= and history:
 
 #+begin_src sh
 cclsh -c 'echo one shot'
-cclsh provision.cclsh
+cclsh provision.sh.lisp
 printf 'ls\n(+ 1 2)\nexit\n' | cclsh
 #+end_src
 
@@ -705,10 +712,10 @@ Script files also work as shebang interpreters:
 #+end_src
 
 Inside a script, =*argv*= contains the script path followed by every argument
-supplied after it. For example, =cclsh provision.cclsh alpha "two words"=
-binds it to =("provision.cclsh" "alpha" "two words")=. Arguments beginning
+supplied after it. For example, =cclsh provision.sh.lisp alpha "two words"=
+binds it to =("provision.sh.lisp" "alpha" "two words")=. Arguments beginning
 with a dash remain script data, and =*argv*= is =nil= outside script mode. Use
-=cclsh -- -script.cclsh argument= when the script path itself begins with a
+=cclsh -- -script.sh.lisp argument= when the script path itself begins with a
 dash. Keep the executable basename =cclsh=; the patched CCL kernel uses that
 name to stop its own option parser at cclsh's command or script boundary.
 
