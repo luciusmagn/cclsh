@@ -261,6 +261,10 @@ CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
   system-visible wrapper. Add =l= or =i= to command mode, such as
   =cclsh -lc command=, to load =startup.lisp= first. Short flags combine
   in any order. =CCLSH_SAFE=1= always skips startup.lisp and history.
+- =cclsh help= prints the same built-in manual as =help= at the interactive
+  prompt, and =cclsh help SECTION= prints one or more sections. These manual
+  requests load no startup or history. Use =cclsh -- help= or =cclsh ./help=
+  to run a script file literally named =help=.
 - Scripts receive =*argv*= as a list containing the script path followed by
   every argument after it. Arguments are preserved literally and are not
   parsed as cclsh options. It is =nil= outside script mode. Use
@@ -341,8 +345,10 @@ highlighted with the standard 16 terminal colors: known commands green,
 builtins and valid implicit directory paths cyan, unknown commands red,
 strings yellow, comments and parens dim, keywords magenta, numbers cyan.
 Output that ends without a newline gets a reverse video ⏎ marker, fish style.
-The =help= builtin prints the built-in manual (=help substitution= etc.);
-=docs/guide.org= is the long form, including login shell setup.
+The =help= builtin prints the built-in manual (=help substitution= etc.). The
+same manual is available outside the shell as =cclsh help= or
+=cclsh help SECTION=; =docs/guide.org= is the long form, including login shell
+setup.
 
 * Not yet
 

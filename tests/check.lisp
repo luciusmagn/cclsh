@@ -221,6 +221,16 @@
              (:missing-command nil nil nil))
             ("configured missing command" ("-l" "-c")
              (:missing-command nil t nil))
+            ("manual overview" ("help")
+             (:manual nil nil nil))
+            ("manual section" ("help" "scripting")
+             (:manual ("scripting") nil nil))
+            ("manual preserves every section argument"
+             ("help" "editing" "--version" "-c")
+             (:manual ("editing" "--version" "-c") nil nil))
+            ("configuration flag before manual"
+             ("-l" "help" "jobs")
+             (:manual ("jobs") t nil))
             ("unknown short flags" ("-xyz")
              (:main nil nil nil))
             ("configuration flags without command" ("-lix")
@@ -236,6 +246,12 @@
             ("double dash permits a dash-prefixed script"
              ("--" "-script.cclsh" "--help")
              (:script "-script.cclsh" nil ("--help")))
+            ("double dash permits a script named help"
+             ("--" "help" "scripting")
+             (:script "help" nil ("scripting")))
+            ("explicit path permits a script named help"
+             ("./help" "scripting")
+             (:script "./help" nil ("scripting")))
             ("double dash without a script starts normally" ("--")
              (:main nil nil nil))))
   (destructuring-bind (name arguments expected) case

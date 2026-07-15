@@ -30,5 +30,5 @@
                                "complete" "directory" "builtins"))
                  (:file "main"
                   :depends-on ("dispatch" "line-editor" "prompt" "directory"
-                               "builtins" "pipeline" "jobs")))))
+                               "builtins" "pipeline" "jobs" "manual")))))
   :description "A system shell running inside Clozure CL")

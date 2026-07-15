@@ -794,6 +794,8 @@ exit 0
          (history          (concatenate 'string config "history"))
          (script           (integration-path
                             "argument mode 猫 script.cclsh"))
+         (help-script-name "help")
+         (help-script      (integration-path help-script-name))
          (dash-script-name "--no-avx")
          (dash-script      (integration-path dash-script-name))
          (shebang-script   (concatenate
@@ -846,6 +848,9 @@ exit 0
      "(setf *argument-startup-loaded* \"loaded\")\n")
     (integration-write-file history (format nil "~s~%" history-text))
     (integration-write-file script script-contents)
+    (integration-write-file
+     help-script
+     (format nil "(format t \"__HELP_SCRIPT_EXECUTED__~~%\")~%"))
     (integration-write-file dash-script script-contents)
     (integration-write-program
      "shebang argument mode 猫.cclsh"
@@ -901,6 +906,71 @@ exit 0
                                (direct-result-error-output result))
        "missing combined -c operand lacked its diagnostic: ~a"
        (integration-tail (direct-result-error-output result))))
+
+    (dolist (case '(("overview" nil "help")
+                    ("single section" ("scripting") "help scripting")
+                    ("multiple sections" ("editing" "unicode")
+                     "help editing unicode")))
+      (destructuring-bind (name sections command) case
+        (let* ((arguments (cons "help" sections))
+               (manual
+                 (integration-run-arguments
+                  arguments
+                  :directory *integration-directory*
+                  :environment configured-environment))
+               (interactive
+                 (integration-run-arguments
+                  (list "-c" command)
+                  :directory *integration-directory*
+                  :environment configured-environment)))
+          (integration-require-success
+           manual (format nil "command-line manual ~a" name))
+          (integration-require-success
+           interactive (format nil "command-mode manual ~a" name))
+          (integration-ensure
+           (and (string= (direct-result-output manual)
+                         (direct-result-output interactive))
+                (string= (direct-result-error-output manual)
+                         (direct-result-error-output interactive)))
+           "command-line manual ~a differs from interactive help: ~a"
+           name (integration-tail (direct-result-output manual)))
+          (integration-ensure
+           (not (integration-contains-p
+                 "__HELP_SCRIPT_EXECUTED__"
+                 (direct-result-output manual)))
+           "command-line manual ~a executed the local help script"
+           name))))
+
+    (let* ((section "definitely-missing-section")
+           (manual
+             (integration-run-arguments
+              (list "help" section)
+              :directory *integration-directory*))
+           (interactive
+             (integration-run-arguments
+              (list "-c" (format nil "help ~a" section))
+              :directory *integration-directory*)))
+      (integration-ensure
+       (and (= 1 (direct-result-status manual))
+            (= (direct-result-status manual)
+               (direct-result-status interactive))
+            (string= (direct-result-output manual)
+                     (direct-result-output interactive))
+            (string= (direct-result-error-output manual)
+                     (direct-result-error-output interactive)))
+       "unknown command-line manual section differs from interactive help: ~a"
+       (integration-tail (direct-result-error-output manual))))
+
+    (let ((result
+            (integration-run-arguments
+             (list "--" help-script-name "literal argument")
+             :directory *integration-directory*)))
+      (integration-require-success result "escaped help script")
+      (integration-ensure
+       (integration-contains-p "__HELP_SCRIPT_EXECUTED__"
+                               (direct-result-output result))
+       "-- help did not execute the local help script: ~a"
+       (integration-tail (direct-result-output result))))
 
     (let ((result (integration-run-arguments (list "-xyz"))))
       (integration-require-success result "unknown short flags"))

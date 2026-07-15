@@ -666,6 +666,17 @@ cclsh provision.cclsh
 printf 'ls\n(+ 1 2)\nexit\n' | cclsh
 #+end_src
 
+The built-in manual is also available as a stateless command-line action:
+
+#+begin_src sh
+cclsh help
+cclsh help scripting
+#+end_src
+
+It accepts the same section arguments and returns the same status as =help=
+inside the shell. Use =cclsh -- help argument= or =cclsh ./help argument= to
+run a script file literally named =help= instead.
+
 Use a configured command string when the command needs aliases, PATH changes
 or other definitions from =startup.lisp=:
 

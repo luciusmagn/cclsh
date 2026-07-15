@@ -410,6 +410,14 @@ Load startup.lisp, but not history, for a configured one-shot:
 Short flags combine in any order: -lc, -cl and -ilc are equivalent,
 and -l -c works too. CCLSH_SAFE=1 suppresses startup.lisp even here.
 
+The same built-in manual is available without starting a shell:
+
+  cclsh help                       overview and section list
+  cclsh help scripting             one section
+
+Manual section arguments are passed directly to the help builtin. Use
+cclsh -- help to run a script file literally named help.
+
 Script files work as shebang interpreters:
 
   #!/usr/local/bin/cclsh
@@ -503,8 +511,9 @@ Emergency access past broken user state:
       (format t "  ~a~a~%"
               (terminal-colorize (format nil "~14a" name) ':cyan)
               one-liner)))
-  (format t "~%help SECTION prints details. commands lists what is callable,~%~
-             --version identifies the build, docs/guide.org is the long form.~%"))
+  (format t "~%help SECTION or cclsh help SECTION prints details.~%~
+             commands lists what is callable, --version identifies the build,~%~
+             and docs/guide.org is the long form.~%"))
 
 (defun manual--print-section (name)
   "Print one manual section. Returns true when NAME exists."

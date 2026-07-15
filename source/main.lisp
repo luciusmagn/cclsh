@@ -261,7 +261,8 @@
 (defun shell--argument-plan (arguments)
   "Decode ARGUMENTS without performing an action.
    Return ACTION, OPERAND, CONFIGURED-P and SCRIPT-ARGUMENTS. ACTION is
-   :MAIN, :COMMAND, :MISSING-COMMAND, :SCRIPT, :VERSION or :HELP.
+   :MAIN, :COMMAND, :MISSING-COMMAND, :MANUAL, :SCRIPT, :VERSION or :HELP.
+   For :MANUAL, OPERAND is the list of requested manual sections.
    Lowercase c selects command mode anywhere in a single-dash group.
    Lowercase l or i in that group, or an earlier group, requests
    startup.lisp for command mode. Other option letters and unknown long
@@ -279,6 +280,9 @@
                     (return (values ':help nil configured-p nil)))
                    ((and options-p (string= argument "--"))
                     (setf options-p nil))
+                   ((and options-p (string= argument "help"))
+                    (return
+                      (values ':manual remaining configured-p nil)))
                    ((and options-p options)
                     (when (or (find #\l options) (find #\i options))
                       (setf configured-p t))
@@ -300,10 +304,10 @@
 
 (defun shell--process-arguments (arguments)
   "Handle command line ARGUMENTS. Returns only when the shell should
-   start its normal read loop; command strings, --version, --help and
-   script files exit the process themselves. Short flags may be combined
-   in any order. Unknown flags are deliberately ignored so an exotic
-   login invocation cannot lock anyone out."
+   start its normal read loop; command strings, manual requests, --version,
+   --help and script files exit the process themselves. Short flags may be
+   combined in any order. Unknown flags are deliberately ignored so an
+   exotic login invocation cannot lock anyone out."
   (multiple-value-bind (action operand configured-p script-arguments)
       (shell--argument-plan arguments)
     (ecase action
@@ -314,6 +318,9 @@
       (:missing-command
        (format *error-output* "cclsh: -c requires an argument~%")
        (shell-quit 2))
+      (:manual
+       (terminal-encoding-setup)
+       (shell-quit (apply #'help operand)))
       (:script
        (shell--run-script operand script-arguments))
       (:version
@@ -328,8 +335,10 @@
        (format t "usage: cclsh [-il] [-c command] [--] ~
                   [script [argument...]] ~
                   [--version] [--help]~%~
+                  cclsh help [section...]~%~
                   short flags may be combined; -l/-i with -c load ~
-                  startup.lisp~%")
+                  startup.lisp~%~
+                  use -- help to run a script named help~%")
        (shell-quit 0)))))
 
 (defun shell--executable-path ()
