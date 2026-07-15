@@ -150,15 +150,16 @@ Reject a background change like any other builtin command."
 
 (defun dispatch-line (line)
   "Execute LINE and return its exit status, recording *LAST-STATUS*.
-   Any non-blank line rearms the stopped jobs exit warning, so only
-   exit directly after the warning leaves stopped jobs behind."
+   Blank and top-level comment lines leave the stopped jobs exit warning
+   armed; any other non-blank line rearms it."
   (let* ((trimmed (string-trim *whitespace-characters* line))
+         (comment-p (line-comment-p trimmed))
          (*jobs-exit-confirmed*
-           (if (zerop (length trimmed))
+           (if (or (zerop (length trimmed)) comment-p)
                *jobs-exit-warned*
                (shiftf *jobs-exit-warned* nil))))
     (setf *last-status*
-          (cond ((zerop (length trimmed))
+          (cond ((or (zerop (length trimmed)) comment-p)
                  *last-status*)
                 ((and (>= (length trimmed) 2)
                       (string= "#!" trimmed :end2 2))

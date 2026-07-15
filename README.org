@@ -218,6 +218,11 @@ CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
 
 * Behavior
 
+- A submitted line whose first non-whitespace character is =;= is a
+  full-line comment. It is ignored in the interactive shell, scripts,
+  piped input and command strings without changing the previous status.
+  Semicolons elsewhere remain literal command arguments. Interactive
+  comments remain available in history like other nonblank submissions.
 - A line starting with =(= is evaluated as Lisp in the =cclsh-user=
   package, values are printed like a REPL.
 - Otherwise the first word resolves to a shell command: a symbol whose

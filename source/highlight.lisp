@@ -250,6 +250,8 @@
    equals the length of LINE."
   (cond ((zerop (length line))
          line)
+        ((line-comment-p line)
+         (ansi-colorize line ':bright-black))
         ((line-lisp-p line)
          (highlight--lisp line (lex-lisp-line line)))
         (t

@@ -217,8 +217,14 @@ Details worth knowing:
 - A glob with no matches passes through unchanged, so =echo *.zip= in
   a zipless directory prints =*.zip=.
 - Globs apply only to whole bare words, not to quoted concatenations.
-- =#= does not start a comment in command mode. =echo hello # note= passes
-  both =#= and =note= to =echo=. Lisp forms use ordinary Lisp comments.
+- A semicolon that is the first non-whitespace character makes the whole
+  submitted line a comment. It is ignored without changing the previous
+  status, including in scripts and piped input. Elsewhere semicolons stay
+  literal, so =echo hello ; note= passes =;= and =note= to =echo=. Inside
+  Lisp forms and substitutions, semicolons keep their ordinary Common Lisp
+  meaning. Interactive comment entries remain available in history.
+- =#= never starts a command comment. =echo hello # note= passes both =#=
+  and =note= to =echo=. Lisp forms use ordinary Lisp comments.
 - There is no =|=, =>= or =<= syntax. A =|= in command mode is passed
   to the program as a literal argument. Pipelines are Lisp forms, see
   below.

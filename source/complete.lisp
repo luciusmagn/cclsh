@@ -270,6 +270,8 @@ paths. Ordinary non-executable files are excluded."
 (defun complete-line (buffer cursor)
   "Compute completions at CURSOR. Returns (values start candidates
    displays); each candidate replaces BUFFER between START and CURSOR."
+  (when (line-comment-p buffer)
+    (return-from complete-line (values cursor nil nil)))
   (if (line-lisp-p buffer)
       (completion--lisp-matches buffer cursor)
       (let ((current (completion--token-at (lex-command-line buffer) cursor)))

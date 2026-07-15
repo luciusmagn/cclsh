@@ -288,6 +288,39 @@
 
 ;;;; -- Multiline Lisp --
 
+(dolist (line (list "; comment"
+                    ";;; comment"
+                    (format nil " ~c ; indented comment" #\Tab)))
+  (check-equal (format nil "top-level comment classification for ~s" line)
+               t
+               (cclsh::line-comment-p line)))
+
+(dolist (line '("" "   " "echo ; literal" "(list ; Lisp comment"
+                "\\; escaped argument" "';' quoted argument"))
+  (check-equal (format nil "non-comment classification for ~s" line)
+               nil
+               (cclsh::line-comment-p line)))
+
+(let ((line (format nil "  ; unmatched ~c and ( with trailing ~c"
+                    #\" #\\)))
+  (check-equal "comment syntax never requests continuation"
+               nil
+               (cclsh::input-line-open-p line))
+  (check-equal "comment highlighting preserves text"
+               line
+               (cclsh::ansi-strip (cclsh::highlight-line line)))
+  (check-equal "comment highlighting is uniformly dim"
+               (cclsh::ansi-colorize line ':bright-black)
+               (cclsh::highlight-line line))
+  (check-equal "comments offer no completions"
+               (list (length line) nil nil)
+               (multiple-value-list
+                (cclsh::complete-line line (length line)))))
+
+(check-equal "inline semicolons remain command arguments"
+             '("echo" ";" "literal")
+             (cclsh::command-line-words "echo ; literal"))
+
 (let ((lisp-line (format nil "(progn~% ; ignored )~% 42)"))
       (command   (format nil "echo (progn ; ignored )~% 42)")))
   (check-equal "complete multiline Lisp comment"
@@ -1010,6 +1043,26 @@
 
 
 ;;;; -- Lisp-dispatched shell status --
+
+(let ((cclsh:*last-status* 23)
+      (cclsh::*jobs-exit-warned* t)
+      (*standard-output* (make-string-output-stream))
+      (*error-output* (make-string-output-stream)))
+  (check-equal "comment preserves the previous status"
+               23
+               (cclsh::dispatch-line "  ; not a command"))
+  (check-equal "comment leaves the previous status recorded"
+               23
+               cclsh:*last-status*)
+  (check-equal "comment leaves stopped-job exit confirmation armed"
+               t
+               cclsh::*jobs-exit-warned*)
+  (check-equal "comment writes no standard output"
+               ""
+               (get-output-stream-string *standard-output*))
+  (check-equal "comment writes no error output"
+               ""
+               (get-output-stream-string *error-output*)))
 
 (let ((cclsh:*last-status* 23)
       (*standard-output* (make-broadcast-stream))

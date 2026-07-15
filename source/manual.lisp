@@ -21,6 +21,10 @@ order:
      literal, evaluates REPL style
   6. otherwise: command not found, status 127
 
+A line whose first non-whitespace character is ; is a comment. The
+whole submitted line is ignored and the previous status is preserved.
+Semicolons elsewhere in command lines remain literal arguments.
+
   ./configure              a path, runs directly
   cd src                   cd is bound to a COMMAND, a builtin
   ls -la                   found in PATH
@@ -58,8 +62,9 @@ immediately. rehash drops all caches.")
   echo pre\"mid dle\"post    one word: premid dlepost
   echo up\\ time            one word: up time
 
-There is no | > or < syntax; a literal | is just an argument. # does
-not start a command comment either. Pipelines are Lisp, see pipelines.")
+There is no | > or < syntax; a literal | is just an argument. # never
+starts a command comment, and ; only does at the start of a submitted
+line after whitespace. Pipelines are Lisp, see pipelines.")
 
     ("substitution" "Lisp values inside command lines"
      "Parens inside a command line substitute Lisp values. The outer
@@ -417,6 +422,9 @@ The same built-in manual is available without starting a shell:
 
 Manual section arguments are passed directly to the help builtin. Use
 cclsh -- help to run a script file literally named help.
+
+Lines whose first non-whitespace character is ; are comments in every
+mode. They may be indented and preserve the preceding exit status.
 
 Script files work as shebang interpreters:
 

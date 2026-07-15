@@ -579,6 +579,8 @@ exit 0
                                 (direct-result-output result))
         (integration-contains-p (format nil "__SCRIPT_ARGV__~s__" expected)
                                 (direct-result-output result))
+        (integration-contains-p "__SCRIPT_COMMENT_STATUS__1__"
+                                (direct-result-output result))
         (integration-contains-p
          (format nil "__SCRIPT_PIPE_ARGV__~s__" expected)
          (direct-result-output result))
@@ -798,6 +800,8 @@ exit 0
          (help-script      (integration-path help-script-name))
          (dash-script-name "--no-avx")
          (dash-script      (integration-path dash-script-name))
+         (comment-status-script
+           (integration-path "comment status script.cclsh"))
          (shebang-script   (concatenate
                             'string *integration-bin-directory*
                             "shebang argument mode 猫.cclsh"))
@@ -816,6 +820,9 @@ exit 0
             (symbol-value '*argument-startup-loaded*)
             \"absent\"))
 (format t \"__SCRIPT_ARGV__~s__~%\" *argv*)
+false
+  ; unmatched \" and trailing \\
+(format t \"__SCRIPT_COMMENT_STATUS__~d__~%\" *last-status*)
 (defcommand script-argv-worker (label)
   (format t \"__SCRIPT_~a_ARGV__~s__~%\" label *argv*)
   0)
@@ -849,13 +856,22 @@ exit 0
     (integration-write-file history (format nil "~s~%" history-text))
     (integration-write-file script script-contents)
     (integration-write-file
+     comment-status-script
+     (format nil "false~%  ; final unmatched ~c and trailing ~c~%"
+             #\" #\\))
+    (integration-write-file
      help-script
      (format nil "(format t \"__HELP_SCRIPT_EXECUTED__~~%\")~%"))
     (integration-write-file dash-script script-contents)
     (integration-write-program
      "shebang argument mode 猫.cclsh"
      (format nil "#!~a~%~a" *integration-binary* script-contents))
-    (integration-write-file pipe-input (format nil "~a~%exit 0~%" command))
+    (integration-write-file
+     pipe-input
+     (format nil
+             "false~%  ; unmatched ~c and trailing ~c~%
+(format t \"__PIPE_COMMENT_STATUS__~~d__~~%\" *last-status*)~%~a~%exit 0~%"
+             #\" #\\ command))
 
     (dolist (flags '(("-lc") ("-cl") ("-ilc") ("-ic")
                      ("-l" "-c") ("-xlc")))
@@ -882,6 +898,17 @@ exit 0
         (direct-result-output result))
        "plain -c loaded user state: ~a"
        (integration-tail (direct-result-output result))))
+
+    (let* ((comment (format nil "  ; unmatched ~c and trailing ~c"
+                            #\" #\\))
+           (result (integration-run-arguments (list "-c" comment))))
+      (integration-require-success result "comment-only -c")
+      (integration-ensure
+       (and (string= "" (direct-result-output result))
+            (string= "" (direct-result-error-output result)))
+       "comment-only -c produced output: ~a / ~a"
+       (integration-tail (direct-result-output result))
+       (integration-tail (direct-result-error-output result))))
 
     (let ((result
             (integration-run-arguments
@@ -983,6 +1010,14 @@ exit 0
       (integration-require-script-arguments
        result expected "direct script argument boundary"))
 
+    (let ((result
+            (integration-run-arguments (list comment-status-script))))
+      (integration-ensure
+       (= 1 (direct-result-status result))
+       "a final script comment changed status 1 to ~d: ~a"
+       (direct-result-status result)
+       (integration-tail (direct-result-error-output result))))
+
     (let* ((expected (cons dash-script-name script-arguments))
            (result
              (integration-run-arguments
@@ -1022,11 +1057,22 @@ exit 0
              nil :input pipe-input :environment configured-environment)))
       (integration-require-success result "piped input")
       (integration-ensure
-       (integration-contains-p
-        "__ARG_STARTUP__absent__ARG_HISTORY__NIL__"
-        (direct-result-output result))
+       (and (integration-contains-p
+             "__PIPE_COMMENT_STATUS__1__"
+             (direct-result-output result))
+            (integration-contains-p
+             "__ARG_STARTUP__absent__ARG_HISTORY__NIL__"
+             (direct-result-output result)))
        "piped input loaded user state: ~a"
-       (integration-tail (direct-result-output result))))))
+       (integration-tail (direct-result-output result))))
+
+    (let ((result
+            (integration-run-arguments nil :input comment-status-script)))
+      (integration-ensure
+       (= 1 (direct-result-status result))
+       "a final piped comment changed status 1 to ~d: ~a"
+       (direct-result-status result)
+       (integration-tail (direct-result-error-output result))))))
 
 (defun integration-check-default-prompt ()
   "Require the built-in prompt to ignore provider executables on PATH."

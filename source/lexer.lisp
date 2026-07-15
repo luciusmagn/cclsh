@@ -383,6 +383,11 @@
 
 ;;; Complete inputs
 
+(defun line-comment-p (line)
+  "True when LINE's first non-whitespace character is a semicolon."
+  (let ((start (position-if-not #'whitespace-char-p line)))
+    (and start (char= (char line start) #\;) t)))
+
 (defun line-lisp-p (line)
   "True when LINE should be treated as a Lisp form."
   (let ((start (position-if-not #'whitespace-char-p line)))
@@ -408,9 +413,12 @@
   "True when LINE is an unfinished input that should continue on the
    next line: an unbalanced Lisp form, an open string in either mode,
    or a trailing backslash."
-  (if (line-lisp-p line)
-      (lisp-line-open-p line)
-      (command-line-open-p line)))
+  (cond ((line-comment-p line)
+         nil)
+        ((line-lisp-p line)
+         (lisp-line-open-p line))
+        (t
+         (command-line-open-p line))))
 
 (defun input-line-join (line continuation)
   "Join a CONTINUATION line onto LINE. A trailing backslash
