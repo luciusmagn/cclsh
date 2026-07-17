@@ -558,7 +558,7 @@ used to replace it.
 | Left, C-b           | move cursor left                    |
 | Right, C-f          | move right or accept a suggestion   |
 | Ctrl-Left/Right     | move backward/forward by word       |
-| Up/Down, C-p/C-n    | older/newer history entry           |
+| Up/Down, C-p/C-n    | older/newer matching history entry  |
 | Home/End, C-a/C-e   | start/end of line                   |
 | Backspace           | delete backward                     |
 | Delete              | delete forward                      |
@@ -585,9 +585,15 @@ and pressing Tab again opens a width-measured candidate grid. Arrow keys
 navigate the grid and Tab cycles candidates. Escape restores the original
 prefix. Other input keeps the selected candidate before applying that input.
 
-The newest history entry beginning with the current input appears in
-dim text after the cursor. Press Right or C-f at the end of the input
-to accept the whole suggestion. Moving within existing input keeps the
+With text already entered, Up or C-p and Down or C-n traverse only history
+entries containing the complete draft captured when backward traversal begins.
+A lowercase draft matches without regard to case; any uppercase letter makes
+the search case-sensitive. Down past the newest match restores the exact draft
+and cursor. Empty input traverses the complete history normally.
+
+The dim suggestion is separate: the newest history entry beginning with the
+current input appears after the cursor. Press Right or C-f at the end of the
+input to accept the whole suggestion. Moving within existing input keeps the
 ordinary one-character Right and C-f behavior.
 
 Input highlights as you type with the standard 16 terminal colors.
@@ -605,7 +611,9 @@ History lives in =~/.config/cclsh/history= (=XDG_CONFIG_HOME= is
 respected), one printed string per entry, capped at 10000 entries on
 load. Blank lines, aborted lines and immediate duplicates are not
 recorded. Piped (non-interactive) sessions neither load nor write
-history. Recalled entries retain embedded newlines exactly.
+history. Recalled entries retain embedded newlines exactly. Typing a substring
+before pressing Up filters traversal with the smart-case rules described under
+[[*Line editing and completion][Line editing and completion]].
 
 * Configuration
 

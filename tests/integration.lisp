@@ -2232,6 +2232,39 @@ false
                (integration-tail output)))))
       (integration-session-stop session))))
 
+(defun integration-check-filtered-history ()
+  "Require typed substrings to filter Up history traversal."
+  (let ((session nil))
+    (unwind-protect
+        (progn
+          (setf session (integration-session-start))
+          (integration-session-command
+           session
+           "(defcommand integration-filtered-history-probe ()
+              (format t \"__FILTERED_HISTORY_~a__~%\" \"EXECUTED\")
+              0)")
+          (integration-session-command
+           session "(integration-filtered-history-probe)")
+          (integration-session-command session "(values)")
+          (let ((start (integration-session-position session)))
+            (integration-session-send session "filtered-history")
+            (integration-session-send
+             session (format nil "~c[A" (code-char 27)))
+            (integration-session-send session (string #\newline))
+            (let* ((end
+                     (integration-session-await-prompt
+                      session start :timeout 8))
+                   (output
+                     (subseq (integration-session-text session)
+                             start end))
+                   (clean (integration-clean-text output)))
+              (integration-ensure
+               (integration-contains-p
+                "__FILTERED_HISTORY_EXECUTED__" clean)
+               "typed substring plus Up did not recall the older match: ~a"
+               (integration-tail output)))))
+      (integration-session-stop session))))
+
 
 ;;;; -- Interactive job and terminal checks --
 
@@ -2655,6 +2688,8 @@ false
                         #'integration-check-interactive)
       (integration-test "PTY Unicode grapheme editing"
                         #'integration-check-unicode-line-editing)
+      (integration-test "PTY typed substring history search"
+                        #'integration-check-filtered-history)
       (integration-test "PTY in-process builtin job control"
                         #'integration-check-builtin-job-control)
       (integration-test "PTY pipeline-aware run job control"

@@ -889,6 +889,22 @@
                multiline
                (cclsh::history-suggestion
                 "echo one" (check-history multiline)))
+  (check-equal "history search matches a middle substring"
+               t
+               (cclsh::history-search-match-p
+                "status" "git status --short"))
+  (check-equal "lowercase history search ignores case"
+               t
+               (cclsh::history-search-match-p "git" "GIT LOG"))
+  (check-equal "uppercase history search is case-sensitive"
+               nil
+               (cclsh::history-search-match-p "Git" "git log"))
+  (check-equal "uppercase history search accepts exact case"
+               t
+               (cclsh::history-search-match-p "Git" "run Git log"))
+  (check-equal "history search rejects missing substrings"
+               nil
+               (cclsh::history-search-match-p "branch" "git status"))
   (check-equal "printed history string round-trips"
                multiline
                (read-from-string

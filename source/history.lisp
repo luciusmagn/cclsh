@@ -39,6 +39,15 @@
                     (string= input entry :end2 (length input)))
             return entry)))
 
+(defun history-search-match-p (query entry)
+  "True when ENTRY contains QUERY using fish-style smart case.
+   Lowercase queries ignore case; an uppercase character makes the whole
+   query case-sensitive."
+  (not (null (search query entry
+                     :test (if (find-if #'upper-case-p query)
+                               #'char=
+                               #'char-equal)))))
+
 (defun history-load ()
   "Load persisted history into *HISTORY*. Unreadable content is
    silently ignored; only the newest *HISTORY-LIMIT* entries are kept."

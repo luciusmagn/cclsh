@@ -248,6 +248,10 @@ CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
   configured one-shots, history persists in =~/.config/cclsh/history=
   (=XDG_CONFIG_HOME= is respected). cclsh keeps the configuration directory
   mode at =0700= and the history file at =0600= when it writes history.
+- With text entered, Up and C-p search older history entries containing the
+  complete draft. Lowercase searches ignore case; uppercase makes them
+  case-sensitive. Down and C-n walk newer matches and restore the exact draft
+  and cursor after the newest match. Empty input traverses all history.
 - The built-in prompt shows =username@hostname=, the current Lisp package,
   directory and status sigil. Set =*prompt-function*= in =startup.lisp= to
   supply any other prompt policy or external renderer.

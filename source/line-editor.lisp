@@ -17,6 +17,7 @@
   (clinedi:edit-line
    prompt
    :history history
+   :history-match-function #'history-search-match-p
    :terminal-size-function #'terminal-size
    :raw-mode-function #'terminal-raw
    :restore-function #'terminal-restore

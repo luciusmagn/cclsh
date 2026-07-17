@@ -253,7 +253,10 @@ Unique matches insert and several extend to the common prefix. Tab again
 opens a candidate grid: arrows navigate, Tab cycles, Escape restores the
 prefix, and typing keeps the selected candidate before inserting. The newest
 history entry beginning with the current input appears in dim text; Right or
-C-f at the end accepts it.
+C-f at the end accepts it. Separately, Up or C-p with text entered searches
+older history entries containing the complete draft. Lowercase searches ignore
+case; any uppercase letter makes the search case-sensitive. Down or C-n walks
+newer matches and then restores the exact draft and cursor.
 
 The built-in prompt shows username@hostname (PACKAGE) directory $. Set
 *prompt-function* in startup.lisp to a function designator for another prompt.
@@ -263,7 +266,7 @@ other values are reported and safely fall back. Use &allow-other-keys in custom
 functions so future context additions remain compatible.
 
   Left/Right C-b/C-f   move/accept   Ctrl-arrows move by word
-  Up/Down C-p/C-n      history       C-w/C-h     kill word
+  Up/Down C-p/C-n      history match C-w/C-h     kill word
   Home/End C-a/C-e     line ends     C-k/C-u     kill rest/line
   Backspace / Delete   delete        C-l/C-c     clear/abort
   C-d                  delete forward, or exit on an empty line
@@ -286,8 +289,11 @@ respected), one printed string per entry:
 Loading keeps the newest 10000. Blank lines, aborted lines and
 immediate duplicates are skipped. Non-interactive sessions neither
 load nor write history. Multi-line entries recall with their original
-newlines. The newest entry beginning with current input is offered as
-a dim suggestion; Right or C-f accepts it. Writes keep the cclsh
+newlines. With text entered, Up searches entries containing that complete
+draft using smart case; Down walks newer matches and restores the draft after
+the newest. Empty input traverses all history. The newest entry beginning with
+current input is offered separately as a dim suggestion; Right or C-f accepts
+it. Writes keep the cclsh
 configuration directory mode at 0700 and the history file at 0600.")
 
     ("environment" "environment variables, the lispy way"
