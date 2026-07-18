@@ -6,6 +6,11 @@ attestation. The editable source history lives in the
 [[https://github.com/luciusmagn/ccl][LuciusMagn CCL fork]]. The project upstream is
 [[https://github.com/Clozure/ccl][Clozure CL]].
 
+The patch mirrors contain material derived from Clozure CL and remain under
+the Apache License 2.0. See [[file:LICENSE][LICENSE]]. The repository's ISC
+license applies to cclsh's original material and does not supersede the
+upstream terms attached to these patches.
+
 The supported downstream line starts at the peeled CCL =v1.13= commit:
 
 #+begin_example

@@ -1,7 +1,7 @@
 (defsystem "cclsh"
   :version "1.0.0"
   :author "Lukáš Hozda"
-  :license "Private"
+  :license "ISC"
   :encoding :utf-8
   :depends-on ("clinedi")
   :components ((:module "source"

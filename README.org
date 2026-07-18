@@ -369,3 +369,10 @@ setup.
 
 => < >>= characters in command mode (use the Lisp redirection
 stages), and a right-side prompt.
+
+* License
+
+cclsh's original code and documentation are released under the ISC license.
+See [[file:LICENSE][LICENSE]]. The CCL-derived patch mirrors under =patches/=
+remain under the Apache License 2.0; see [[file:patches/LICENSE][their license]]
+and [[file:patches/README.org][provenance ledger]].

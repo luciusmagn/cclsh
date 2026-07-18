@@ -225,6 +225,7 @@
         meta = {
           description = "System shell running inside Clozure CL";
           homepage = "https://github.com/luciusmagn/cclsh";
+          license = lib.licenses.isc;
           mainProgram = "cclsh";
           platforms = [ "x86_64-linux" ];
         };
