@@ -1,0 +1,407 @@
+#+TITLE: CCLSH adaptation opportunities from Yew and Lish
+#+AUTHOR: Lukáš Hozda
+#+DATE: 2026-07-18
+
+* Scope
+
+This report compares CCLSH with Yew's Lish shell and RL line editor. The
+upstream reference is Yew =master= at commit
+[[https://github.com/common-lamb/yew/tree/3e11b1f97171642f456310b84a7a25a13a4a2cdc][=3e11b1f97171642f456310b84a7a25a13a4a2cdc=]], dated 2025-11-10.
+The remote head was verified on 2026-07-18. Conclusions below are based on the
+source and documentation at that fixed revision rather than on feature names
+alone.
+
+Lish is useful as a catalogue of shell experiments, not as a dependency or an
+architecture to transplant. Its system definition pulls in a broad Yew stack
+covering terminal I/O, themes, tables, completion, globbing, operating-system
+abstractions and the RL editor. Its own documentation calls it incomplete and
+experimental, and describes SBCL as the primary implementation while CCL is
+less tested and too slow in practice:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/lish.asd#L5-L50][Lish system definition and dependencies]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/docs/future.org#L85-L89][Lish experimental warning]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/docs/doc.org#L39-L50][implementation portability notes]]
+
+* Executive conclusion
+
+The strongest adaptable idea is Lish's self-describing command model. One
+declarative argument description supplies parsing, validation, help and
+context-sensitive completion. CCLSH already has the right command object and
+lexer boundaries for a smaller and more reliable implementation.
+
+The second major opportunity is editor extensibility. Yew's RL editor has
+programmable keymaps, incremental history search, undo, yank and partial
+suggestion acceptance. Those generic interactions belong in Clinedi, whose
+Unicode, wrapping and resize behavior should remain the foundation.
+
+The most distinctive research direction is a Lisp-value pipeline. It fits the
+idea of a shell embedded in a live Lisp image, but it should be a new explicit
+abstraction. CCLSH's existing =pipe= must remain a Unix byte-stream pipeline
+with real process groups.
+
+Several smaller features have excellent value relative to their size:
+=type -a= resolution introspection, =capture-lines=, lifecycle hooks, richer
+globbing and a =pkg= command.
+
+| Priority     | Idea                                          | Owner             | Recommendation    |
+|--------------+-----------------------------------------------+-------------------+-------------------|
+| Highest      | Declarative command arguments                 | CCLSH             | Build             |
+| Highest      | Argument-aware completion and generated help  | CCLSH and Clinedi | Build             |
+| High         | Programmable keymaps, Ctrl-R, undo and yank   | Clinedi           | Build             |
+| High, small  | =type -a= resolution introspection            | CCLSH             | Build             |
+| High, small  | Richer capture and result helpers             | CCLSH             | Build             |
+| Medium       | General command lifecycle hooks               | CCLSH             | Build             |
+| Medium       | Character-class globs, globstar and braces    | CCLSH             | Build carefully   |
+| Medium       | Structured history metadata                   | CCLSH and Clinedi | Defer             |
+| Experimental | Lisp-value pipelines                          | CCLSH             | Design separately |
+| Low          | Structured aliases, =pushd=, =popd= and =pkg= | CCLSH             | Convenience work  |
+
+* Self-describing commands
+
+Lish command objects carry an argument list, automatic-help policy and the
+types accepted from a pipeline. Each argument can describe its type, default,
+optional and repeating state, short and long option spellings, help text,
+dynamic choices and completion function:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/commands.lisp#L35-L109][command protocol]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/args.lisp#L7-L129][argument model]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/args.lisp#L473-L526][static and dynamic choices]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/commands.lisp#L266-L364][declarative =defcommand=]]
+
+CCLSH's [[file:../source/command.lisp::54][command object]] currently stores only
+the name, function and documentation string. It should gain optional argument
+specifications while preserving the current =defcommand= syntax and ordinary
+Lisp lambda list. Existing commands without specifications must continue to
+receive strings exactly as they do now.
+
+The first specification vocabulary should cover:
+
+- positional, optional and repeating arguments;
+- boolean and value-taking options;
+- path, directory, command, package, integer, string and choice kinds;
+- short and long option spellings;
+- help text and dynamic completion providers;
+- later, declared input and output kinds for Lisp-value commands.
+
+Metadata should initially be advisory. Completion, synopsis generation and
+help can consume it without changing invocation. Automatic string-to-object
+conversion should be a later opt-in feature.
+
+Lish's parser should not be ported. Its completion code selects an argument by
+counting preceding words and explicitly admits that this fails for options
+which consume a value. CCLSH should instead produce a partial parse state which
+records used options, a pending option value, the current positional argument
+and whether option parsing has ended:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/complete.lisp#L357-L382][Lish's argument-state diagnosis]]
+
+* Semantic completion and generated help
+
+Lish uses command metadata to complete short and long options, call a
+per-argument provider, validate a dynamic choice, display an argument's
+description and generate command help:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/complete.lisp#L246-L355][option descriptions and synopsis display]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/complete.lisp#L449-L527][argument-aware completion]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/complete.lisp#L611-L717][completion context classification]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/lish.lisp#L410-L468][help at the cursor]]
+
+CCLSH's [[file:../source/complete.lisp::270][completion entry point]] currently
+completes commands at the command head and files in most argument positions.
+The next design should introduce:
+
+1. A CCLSH provider protocol receiving the resolved command, tokenized words,
+   cursor location and partial argument state.
+2. A rich candidate containing insertion text, display text, description and
+   semantic kind.
+3. Default providers for files, directories, commands, packages, environment
+   variables, jobs and declared choices.
+4. Generated =help COMMAND= and =COMMAND --help= output from the same argument
+   specifications.
+5. A non-destructive editor action which explains what is expected at the
+   cursor.
+
+Clinedi should render and navigate opaque rich candidates. CCLSH should remain
+responsible for shell parsing, quoting, replacement spans and provider policy.
+This preserves the current separation described in
+[[file:../../clinedi/README.md::58][Clinedi's candidate-selection API]].
+
+* Clinedi editor opportunities
+
+Yew's RL editor exposes layered keymaps rather than fixing every binding in one
+terminal event dispatcher. It also contains interactive forward and backward
+history search, undo records, a kill ring and a command which accepts one word
+from a ghost suggestion:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/rl/rl.lisp#L9-L103][normal keymap]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/rl/search.lisp#L20-L185][incremental history search]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/rl/undo.lisp#L21-L197][undo model]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/rl/commands.lisp#L188-L205][partial suggestion acceptance]]
+
+Clinedi already provides Unicode grapheme handling, terminal-cell layout,
+wrapped multiline movement, resize-safe repainting, completion selection and
+ghost text. Replacing it with RL would lose the focused library boundary and
+reintroduce terminal defects which have already been fixed.
+
+Recommended Clinedi additions, in order of user value:
+
+1. A public event-to-command keymap accepted by the blocking and incremental
+   frontends. CCLSH's =startup.lisp= can then install personal bindings without
+   teaching either library about a user's policy.
+2. Ctrl-R and Ctrl-S incremental history search with cancellation, repetition
+   and highlighted matches.
+3. Accept one ghost-suggestion word with Meta-F or Ctrl-Right while preserving
+   ordinary word motion when no suggestion is available.
+4. Undo and redo with sensible edit boundaries.
+5. A kill ring and Ctrl-Y yank.
+6. Meta-. insertion of the previous command's last argument. CCLSH should
+   extract that argument through its lexer rather than generic word splitting.
+7. Matching-delimiter highlighting.
+
+CCLSH already implements fish-style smart-case substring traversal for Up and
+Down. The useful thing to borrow from RL is the interactive search mode, not
+its matcher. RL's case-test selection at the inspected revision appears
+reversed.
+
+A right prompt is lower priority. If implemented, it belongs in Clinedi as an
+optional generic renderer. CCLSH must not gain knowledge of Starship or any
+other prompt program; personal prompt policy remains in =startup.lisp=.
+
+* Resolution introspection
+
+Lish can report every interpretation of a command name and every executable
+with that name in the search path:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/builtin.lisp#L1452-L1561][Lish =type= implementation]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/docs/lish-examples.md#L250-L277][command and Lisp name ambiguity]]
+
+This is particularly valuable in CCLSH because command objects, external
+programs, explicit directory paths and lone Lisp values share the top-level
+interface. A =type NAME= builtin should describe the interpretation which
+would win. =type -a NAME= should list:
+
+- the CCLSH command object, when one exists;
+- every executable hit in =PATH=, in resolution order;
+- an explicit path's file or directory status;
+- whether the lone-word Lisp-value fallback applies;
+- an existing Lisp function or variable as informational Lisp state.
+
+The output must distinguish actual command-mode resolution from symbols which
+are only callable inside a Lisp form. Unlike Lish, CCLSH should not make an
+arbitrary function runnable merely because its name was typed without parens.
+
+* Library-oriented execution results
+
+Lish exposes separate helpers for Boolean success, a captured string, a list
+of lines, parsed words and a live output stream:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/piping.lisp#L127-L210][line and mapping helpers]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/piping.lisp#L394-L527][success, capture and stream helpers]]
+
+CCLSH already has the stronger primitive: =run=, =pipe= and =capture= accept
+evaluated Lisp arguments, preserve actual argument boundaries and work when the
+system is Quickloaded as a library. The useful adaptation is a small set of
+descriptively named result adapters:
+
+- =capture-lines= returns a list of complete decoded lines plus status;
+- =capture-bytes= returns an octet vector plus status;
+- =command-success-p= converts Unix status without losing =*last-status*=;
+- =with-command-output= exposes a streaming input interface with explicit
+  ownership and close behavior;
+- a later =command-result= object can carry status, standard output and
+  standard error when both streams are captured concurrently.
+
+Each API must document newline removal, UTF-8 decoding errors, binary output,
+maximum-memory behavior and whether a nonzero status still returns captured
+data. Lish's punctuation family such as =!$=, =!_= and =!-= should not be
+adopted.
+
+* Lifecycle hooks
+
+Lish exposes pre-command, post-command, unknown-command, shell-enter and
+shell-exit hook variables:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/vars.lisp#L238-L256][Lish lifecycle hooks]]
+
+CCLSH should generalize the disciplined behavior of its existing directory
+hooks. A hook should receive one event object rather than an unstable positional
+argument list. Useful fields include:
+
+- raw input and expanded argv;
+- resolved command kind and executable path;
+- working directory;
+- pipeline and background state;
+- start time, duration and final status;
+- a reported condition, when execution failed.
+
+Hook failures must be reported without preventing later hooks or changing the
+command's result. Before-command hooks should initially be observational. An
+unknown-command hook may return an explicit handled result, but ordinary hook
+return values should not silently rewrite commands.
+
+This supports terminal-title updates, notifications, direnv-like integration,
+timing records and prompt invalidation without placing those policies in core
+CCLSH.
+
+* Expansion improvements
+
+CCLSH currently implements =*= and =?= per path segment in
+[[file:../source/expand.lisp::104][its glob matcher]]. Yew demonstrates a useful
+next sequence:
+
+1. =[abc]=, =[a-z]= and negated character classes.
+2. =**= recursive globbing.
+3. ={a,b}= alternatives.
+4. ={1..5}=, character ranges and optionally stepped ranges.
+
+Relevant upstream implementations and examples are:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/iof/glob.lisp#L294-L327][Yew glob syntax]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/expand.lisp#L315-L454][Lish brace alternatives and ranges]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/docs/lish-examples.md#L170-L201][brace and glob examples]]
+
+The behavior is worth adapting, but not the matcher. Yew warns about
+exponential matching and malformed nested braces. CCLSH should impose a total
+match count, brace expansion count and recursion depth. Globstar traversal must
+avoid symbolic-link cycles and retain the current rule that hidden entries need
+an explicit leading dot.
+
+* Structured history
+
+Yew's history entries can carry timestamps and extensible metadata, while the
+storage layer has a versioned append format:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/rl/history.lisp#L48-L101][history entries and contexts]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/rl/history-store.lisp#L13-L103][storage protocol and versioning]]
+
+CCLSH could eventually retain the line, timestamp, working directory, status,
+duration and session identifier. That would enable directory-aware search,
+=history --failed=, timing inspection and better multi-session behavior.
+
+The current printed-string history format is small, readable and robust. A new
+format must preserve mode =0600=, bind =*read-eval*= to =nil= when Lisp forms
+are used, tolerate an incomplete final record and handle concurrent appenders.
+Arbitrary result objects should not be persisted. A versioned sidecar or an
+explicit migration is preferable to silently changing the existing file.
+
+* Lisp-value pipelines
+
+Lish can pass an in-process Lisp object from one stage to another. A following
+function may consume the previous result as a missing final argument, and
+commands can declare the input kinds they accept:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/docs/lish-examples.md#L279-L312][object-pipeline examples]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/vars.lisp#L39-L103][dynamic input and output values]]
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/lish.lisp#L970-L1135][mixed object and stream execution]]
+
+This is the most compelling long-term feature for CCLSH, but Lish combines
+object state and stream state too implicitly. CCLSH should keep
+[[file:../source/pipeline.lisp::56][=pipe=]] byte-oriented and introduce a
+separate explicit =value-pipe= or =vpipe= only after answering:
+
+- Is a stage's result one Lisp value, all Common Lisp multiple values, or a
+  sequence of values?
+- How are exit status and Lisp value represented without overloading either?
+- Does a condition abort the whole value pipeline or become a result object?
+- Which stages are lazy, and how is backpressure represented?
+- How are values converted when crossing an external-process boundary?
+- Which explicit adapters convert between values, lines, text, bytes and JSON?
+
+Objects must never be exported through environment variables as an implicit
+serialization channel. External boundaries should be visible in the form and
+use deliberate adapters.
+
+* Smaller ideas
+
+** Explicit ASDF command autoloading
+
+Lish attempts to find and load a same-named ASDF system for a command:
+
+- [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/commands.lisp#L448-L568][ASDF command loading]]
+
+CCLSH can support an explicit registry such as =autoload-command= which maps a
+command name to a known system and exported command. Completion may show the
+registered command without loading it. Unknown words must not trigger arbitrary
+Quicklisp or ASDF activity because a typo should not compile code, produce
+noise or delay command-not-found reporting.
+
+** Structured aliases
+
+Textual alias substitution is convenient but introduces recursive parsing,
+quoting surprises and injection-like behavior. Existing =defcommand= wrappers
+are already the clean solution for most personal aliases. If a lightweight
+alias facility is added, store a command target plus a prefix argv vector and
+append the user's arguments without reparsing text.
+
+** Directory and package conveniences
+
+=pushd=, =popd= and =dirs= are familiar and inexpensive, although zoxide already
+covers the more powerful navigation use case. A =pkg NAME= command with package
+completion, plus =pkg -= to return to the previous package, fits CCLSH especially
+well now that the current package is visible in the prompt and environment.
+
+* Ideas not recommended
+
+- Do not depend on Yew or replace Clinedi with RL. The dependency surface is
+  disproportionate and the editor boundary would become less focused.
+- Do not port Lish's reader, infix pipeline operators or =^= command separator.
+  CCLSH's span lexer and explicit Lisp orchestration are clearer boundaries.
+- Do not invoke arbitrary Lisp functions without parens. Lish's own =sleep=
+  example demonstrates command/function precedence ambiguity.
+- Do not mine options from executable strings or man pages as a core feature.
+  Lish describes the mechanism as slow, hackish, likely to fail and incomplete:
+  [[https://github.com/common-lamb/yew/blob/3e11b1f97171642f456310b84a7a25a13a4a2cdc/lish/mine.lisp#L5-L46][command mining assessment]].
+- Do not adopt Lish's job implementation. Its Lisp and thread job operations
+  remain partly unimplemented, while CCLSH already has real Unix process-group
+  ownership, terminal handoff and pipeline-wide job control.
+- Do not add a prompt or theme language to CCLSH. The generic prompt callback
+  and personal =startup.lisp= are the correct policy boundary.
+- Do not create a second configuration language around typed shell options.
+  Discoverability can come from documented specials and command metadata while
+  configuration remains ordinary Common Lisp.
+
+* Ownership boundary
+
+Future work should preserve this division:
+
+- Clinedi owns generic editing state, keymaps, undo, kill rings, search modes,
+  completion presentation, suggestion interaction and terminal rendering.
+- CCLSH owns command resolution, shell parsing, argument specifications,
+  completion providers, help policy, expansion, process execution, hooks,
+  history persistence and value-pipeline semantics.
+- =startup.lisp= owns personal prompt software, aliases, optional integrations
+  and user-specific key bindings.
+
+This boundary lets Clinedi remain useful to other terminal applications while
+CCLSH remains free to be an opinionated Lisp shell.
+
+* Licensing and provenance
+
+CCLSH's original code and documentation are ISC licensed; see
+[[file:../LICENSE][the repository license]]. Lish declares GPL-3.0-only in its
+system definition. This report identifies behaviors and architectural ideas.
+Any adaptation should be a fresh implementation based on CCLSH and Clinedi's
+own abstractions rather than copied Lish or RL source, unless the licensing
+strategy is deliberately changed.
+
+The CCL-derived patch mirrors under =patches/= retain their upstream
+Apache-2.0 terms as recorded in the
+[[file:../patches/README.org][CCL downstream patch ledger]].
+
+* Proposed implementation sequence
+
+1. Add the small standalone facilities: =type -a=, =capture-lines= and =pkg=.
+2. Add command argument specifications and a real partial argument parser.
+3. Generate per-command help and semantic completion from those specifications.
+4. Add Clinedi keymaps, Ctrl-R search, partial suggestion acceptance, undo and
+   yank.
+5. Add structured lifecycle hooks.
+6. Extend globbing with character classes and globstar, then add bounded brace
+   expansion.
+7. Introduce versioned history metadata when directory and status-aware history
+   becomes a concrete feature.
+8. Prototype =value-pipe= separately, without changing ordinary =pipe=.
+
+Each item should remain an independently tested change. In particular, command
+metadata should not be coupled to value pipelines, and editor improvements
+should land in Clinedi before CCLSH binds them.

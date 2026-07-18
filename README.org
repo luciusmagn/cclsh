@@ -365,6 +365,12 @@ same manual is available outside the shell as =cclsh help= or
 =cclsh help SECTION=; =docs/guide.org= is the long form, including login shell
 setup.
 
+* Design notes
+
+- [[file:docs/yew-lish-adaptation.org][Yew and Lish adaptation report]] evaluates
+  upstream shell and editor ideas against CCLSH and Clinedi, with a ranked
+  implementation sequence.
+
 * Not yet
 
 => < >>= characters in command mode (use the Lisp redirection
