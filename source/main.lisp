@@ -320,7 +320,8 @@
        (shell-quit 2))
       (:manual
        (terminal-encoding-setup)
-       (shell-quit (apply #'help operand)))
+       (let ((*package* (find-package '#:cclsh)))
+         (shell-quit (apply #'help operand))))
       (:script
        (shell--run-script operand script-arguments))
       (:version
