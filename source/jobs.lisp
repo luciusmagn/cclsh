@@ -794,6 +794,21 @@ pipeline job and inherits that stage's prepared standard descriptors.")
                                               :end2 (length bare)))))
                             (jobs--ordered)))))))))
 
+(defun job-find-substring (spec)
+  "Find the job named by SPEC, falling back to a command substring.
+Standard job selectors and command prefixes retain JOB-FIND precedence."
+  (or (job-find spec)
+      (when spec
+        (let* ((text (princ-to-string spec))
+               (substring (if (and (plusp (length text))
+                                   (char= (char text 0) #\%))
+                              (subseq text 1)
+                              text)))
+          (and (plusp (length substring))
+               (find-if (lambda (job)
+                          (search substring (job-command job)))
+                        (jobs--ordered)))))))
+
 (defun job--complain (builtin spec)
   "Report a job lookup failure for BUILTIN and return its exit status."
   (format *error-output* "~a~%"
@@ -831,6 +846,17 @@ pipeline job and inherits that stage's prepared standard descriptors.")
                (when (eq status ':done)
                  (job-unregister job))))
            0))))
+
+(defcommand disown (&optional spec)
+  "Remove a job from shell management without signaling it. SPEC may be
+   a job id, a standard job selector or any substring of the command;
+   without it the current job is removed."
+  (let ((job (job-find-substring spec)))
+    (if job
+        (progn
+          (job-unregister job)
+          0)
+        (job--complain "disown" spec))))
 
 (defcommand fg (&optional spec)
   "Resume a stopped or background job in the foreground. SPEC picks

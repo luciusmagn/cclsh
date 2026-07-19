@@ -2053,6 +2053,39 @@
         (cclsh:setenv name old-value)
         (cclsh::unsetenv name))))
 
+(let* ((current  (cclsh::job-make :command "sleep current"))
+       (previous (cclsh::job-make :command "deploy worker beta"))
+       (other    (cclsh::job-make :command "sleep other")))
+  (setf (cclsh::job-id current) 7
+        (cclsh::job-touched current) 30
+        (cclsh::job-id previous) 3
+        (cclsh::job-touched previous) 20
+        (cclsh::job-id other) 11
+        (cclsh::job-touched other) 10)
+  (let ((cclsh::*jobs* (list current previous other)))
+    (check-equal "disown accepts a numeric job id"
+                 0
+                 (cclsh:disown 11))
+    (check-equal "numeric disown removes only its job"
+                 (list current previous)
+                 cclsh::*jobs*)
+    (check-equal "disown accepts a command substring"
+                 0
+                 (cclsh:disown "worker beta"))
+    (check-equal "substring disown removes its job"
+                 (list current)
+                 cclsh::*jobs*)
+    (check-equal "disown without an argument removes the current job"
+                 0
+                 (cclsh:disown))
+    (check-equal "disown empties the job table"
+                 nil
+                 cclsh::*jobs*)
+    (let ((*error-output* (make-string-output-stream)))
+      (check-equal "disown rejects an unknown job"
+                   1
+                   (cclsh:disown "missing")))))
+
 (let* ((current (cclsh::job-make :command "sleep current"))
        (previous (cclsh::job-make :command "sleep previous")))
   (setf (cclsh::job-id current) 7

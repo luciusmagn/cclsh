@@ -181,7 +181,7 @@ Ctrl-C, Ctrl-Z and fg. Direct CCL:RUN-PROGRAM calls and separately
 created Lisp threads bypass this inheritance.
 
 Builtins: cd (with -), exit, export, unset, rehash, commands, help,
-jobs, fg, bg and zoxide-setup. Saved cclsh images include Quicklisp;
+jobs, disown, fg, bg and zoxide-setup. Saved cclsh images include Quicklisp;
 quicklisp-setup loads or installs it when running from an unsaved development
 image.
 commands lists everything currently defined.")
@@ -238,7 +238,7 @@ Each pipeline returns the deciding exit status and records
 interrupts every stage and Ctrl-Z stops the whole pipeline together,
 see jobs.")
 
-    ("jobs" "background jobs, fg, bg and Ctrl-Z"
+    ("jobs" "background jobs, disown, fg, bg and Ctrl-Z"
      "Background and stopped commands are jobs:
 
   sleep 300 &              background job, prints [1] 12345
@@ -249,6 +249,10 @@ see jobs.")
   fg                       resume the current job in the foreground
   bg %2                    resume a stopped job in the background
   fg %ma                   specs: %2, 2, %+, %-, %prefix
+  disown build             forget a job by id or command substring
+
+ Disown removes a job from shell management without signaling it. The job
+ is no longer listed and receives no SIGHUP from cclsh on exit.
 
 Finished background jobs are announced before the next prompt as
 Done, Exit 2 or the ending signal. fg restores the terminal modes a
@@ -261,10 +265,10 @@ reports an error for them. Builtin stages inside pipe are controlled
 with the rest of their pipeline and can be stopped and resumed. Ctrl-Z
 during another busy Lisp evaluation stops the shell itself, so avoid
 that one. exit with stopped jobs warns once, exit again to leave anyway.
-Every orderly exit sends SIGHUP to live job groups and SIGCONT to stopped
-groups so they do not linger after logout.
-jobs, fg and bg are ordinary functions too: (fg 1) resumes job 1 from
-Lisp.")
+Every orderly exit sends SIGHUP to tracked live job groups and SIGCONT to
+tracked stopped groups so they do not linger after logout.
+jobs, disown, fg and bg are ordinary functions too: (fg 1) resumes job 1
+and (disown \"build\") forgets a matching job from Lisp.")
 
     ("editing" "keys, completion and colors"
      "At a slash-free command position, Tab completes command names and

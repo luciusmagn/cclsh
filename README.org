@@ -259,10 +259,12 @@ CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
   interactive programs work and Ctrl-C reaches the child, not the
   shell. Errors and Ctrl-C never drop you into the CCL debugger.
 - Job control: =command &= starts a background job, Ctrl-Z stops the
-  foreground command or pipeline, =jobs=, =fg= and =bg= manage them,
-  and finished background jobs are announced before the next prompt.
-  =exit= warns once about stopped jobs. Orderly exit sends SIGHUP to live
-  jobs and SIGCONT to stopped jobs so logout does not leave them behind.
+  foreground command or pipeline, and =jobs=, =fg=, =bg= and =disown=
+  manage them. =disown= accepts a job id or command substring and removes
+  the job from shell management without signaling it. Finished background
+  jobs are announced before the next prompt. =exit= warns once about stopped
+  jobs. Orderly exit sends SIGHUP to tracked live jobs and SIGCONT to tracked
+  stopped jobs so logout does not leave them behind.
 - =cclsh -c command=, script files, shebang scripts and piped input run
   without user state. Remote operations therefore work for executables
   already visible in sshd's environment, including ordinary system installs

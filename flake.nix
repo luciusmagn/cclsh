@@ -151,7 +151,7 @@
 
       cclsh = pkgs.stdenvNoCC.mkDerivation {
         pname = "cclsh";
-        version = "1.0.0";
+        version = "1.1.0";
         src = self;
 
         nativeBuildInputs = [
@@ -253,7 +253,7 @@
           mkdir -p "$HOME"
 
           ${lib.getExe cclsh} --version >version
-          grep -F "cclsh 1.0.0" version
+          grep -F "cclsh 1.1.0" version
           ${lib.getExe cclsh} -c 'exit 0'
           ${lib.getExe cclsh} -c \
             '(progn (unless (and (probe-file (merge-pathnames "setup.lisp" ql-setup:*quicklisp-home*)) (ql-dist:find-dist "quicklisp") (uiop:subpathp asdf:*user-cache* (uiop:ensure-directory-pathname (pathname (cclsh:getenv "XDG_CACHE_HOME")))) (member #P"${cclsh}/share/cclsh/" ql::*local-project-directories* :test (function equal))) (error "packaged Quicklisp is not writable and initialized")) (values))'

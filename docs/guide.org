@@ -580,8 +580,8 @@ binary data.
 * Job control
 
 A trailing =&= launches an external command as a background job,
-Ctrl-Z stops the foreground command or pipeline, and =jobs=, =fg= and
-=bg= inspect and resume what the job table holds:
+Ctrl-Z stops the foreground command or pipeline, and =jobs=, =fg=, =bg=
+and =disown= manage what the job table holds:
 
 #+begin_src sh
 sleep 300 &
@@ -589,20 +589,25 @@ make build
 jobs
 bg %2
 fg
+disown 1
 #+end_src
 
 The first command prints its job id and process id. Press Ctrl-Z during
 =make build= to create the stopped second job. =jobs= marks the current job
 with =+=, =bg %2= continues it in the background, and =fg= brings the current
-job back to the terminal.
+job back to the terminal. =disown 1= removes the first job from shell
+management without signaling it, so it is no longer listed or sent SIGHUP
+when cclsh exits.
 
 Job specs work like sh: =%1= or plain =1= by id, =%+=, =%%= or === for
 the current job, =%-= for the previous one, and =%text= for the most
 recent job whose command starts with =text=. Without an argument =fg=
 and =bg= act on the current job, the one =jobs= marks with =+=.
-=jobs -l= adds process group ids, which is what =kill= wants: =kill
--TERM -12345= ends a whole job. The builtins are ordinary functions
-too, so =(fg 1)= and =(jobs)= work from Lisp.
+=disown= does the same without an argument and additionally accepts any
+command substring, for example =disown build=. =jobs -l= adds process group
+ids, which is what =kill= wants: =kill -TERM -12345= ends a whole job. The
+builtins are ordinary functions too, so =(fg 1)=, =(disown "build")= and
+=(jobs)= work from Lisp.
 
 Details worth knowing:
 

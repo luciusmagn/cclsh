@@ -103,6 +103,7 @@
            #:commands
            #:help
            #:jobs
+            #:disown
            #:fg
            #:bg
            #:export
@@ -135,6 +136,7 @@
                           #:commands
                           #:help
                           #:jobs
+                           #:disown
                           #:fg
                           #:bg
                           #:export
