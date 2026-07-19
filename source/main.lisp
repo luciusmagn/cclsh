@@ -262,7 +262,7 @@
   "Decode ARGUMENTS without performing an action.
    Return ACTION, OPERAND, CONFIGURED-P and SCRIPT-ARGUMENTS. ACTION is
    :MAIN, :COMMAND, :MISSING-COMMAND, :MANUAL, :SCRIPT, :VERSION or :HELP.
-   For :MANUAL, OPERAND is the list of requested manual sections.
+   For :MANUAL, OPERAND is the list of requested sections or commands.
    Lowercase c selects command mode anywhere in a single-dash group.
    Lowercase l or i in that group, or an earlier group, requests
    startup.lisp for command mode. Other option letters and unknown long
@@ -335,7 +335,7 @@
        (format t "usage: cclsh [-il] [-c command] [--] ~
                   [script [argument...]] ~
                   [--version] [--help]~%~
-                  cclsh help [section...]~%~
+                  cclsh help [section-or-command...]~%~
                   short flags may be combined; -l/-i with -c load ~
                   startup.lisp~%~
                   use -- help to run a script named help~%")

@@ -2,6 +2,11 @@
 
 (in-package #:cclsh)
 
+(defparameter *line-editor-keymap* (clinedi:default-line-editor-keymap)
+  "Mutable Clinedi event-to-command keymap used for interactive input.
+Startup files may replace this with another CLINEDI:KEYMAP or change bindings
+with CLINEDI:KEYMAP-BIND. The default map is private to this CCLSH image.")
+
 (defun line-editor--accept-completion (candidate)
   "Return the accepted form of CANDIDATE for insertion into shell input.
    Directory candidates stay open for further path completion. Other unique
@@ -26,4 +31,5 @@
    :common-prefix-function #'completion--common-prefix
    :completion-accept-function #'line-editor--accept-completion
    :completion-arrangement :grid
-   :suggestion-function #'history-suggestion))
+   :suggestion-function #'history-suggestion
+   :keymap *line-editor-keymap*))

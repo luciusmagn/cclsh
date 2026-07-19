@@ -37,11 +37,51 @@
            #:*argv*
            #:*directory-change-hooks*
            #:*prompt-function*
+           #:*line-editor-keymap*
            #:prompt-default
            #:command
            #:command-name
            #:command-function
            #:command-documentation
+           #:command-arguments
+           #:command-declarative-arguments-p
+           #:command-argument
+           #:command-argument-name
+           #:command-argument-kind
+           #:command-argument-value-type
+           #:command-argument-required-p
+           #:command-argument-repeating-p
+           #:command-argument-short-name
+           #:command-argument-long-name
+           #:command-argument-documentation
+           #:command-argument-choices
+           #:command-argument-completion-function
+           #:command-argument-metavariable
+           #:command-argument-convert-p
+           #:command-argument-converter
+           #:command-argument-choice-values
+           #:command-completion-context
+           #:make-command-completion-context
+           #:command-completion-context-command
+           #:command-completion-context-argument
+           #:command-completion-context-words
+           #:command-completion-context-used-options
+           #:command-completion-context-positional-index
+           #:command-completion-context-options-enabled-p
+           #:command-completion-context-prefix
+           #:command-completion-context-buffer
+           #:command-completion-context-cursor
+           #:completion-candidate
+           #:make-completion-candidate
+           #:completion-candidate-p
+           #:completion-candidate-insertion
+           #:completion-candidate-display
+           #:completion-candidate-description
+           #:completion-candidate-kind
+           #:command-arguments-context
+           #:command-arguments-parse
+           #:command-help-string
+           #:command-print-help
            #:defcommand
            #:run
            #:cmd
@@ -75,6 +115,7 @@
            #:quicklisp-setup
            #:shell-error
            #:command-not-found-error
+           #:command-argument-error
            #:pipeline-syntax-error)
   (:documentation "A system shell running inside Clozure CL."))
 

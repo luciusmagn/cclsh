@@ -936,6 +936,7 @@ false
 
     (dolist (case '(("overview" nil "help")
                     ("single section" ("scripting") "help scripting")
+                    ("generated command" ("cd") "help cd")
                     ("multiple sections" ("editing" "unicode")
                      "help editing unicode")))
       (destructuring-bind (name sections command) case

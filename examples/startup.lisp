@@ -65,3 +65,7 @@
 ;; Zoxide is optional. After installing it, uncomment this to record every
 ;; successful cd and install the z and zi commands.
 ;; (zoxide-setup)
+
+;; Clinedi exposes semantic event-to-command bindings. This example makes the
+;; decoded Ctrl-Right event move by one grapheme instead of one word.
+;; (clinedi:keymap-bind *line-editor-keymap* :word-right :right)

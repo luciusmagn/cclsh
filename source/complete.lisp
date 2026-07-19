@@ -154,10 +154,10 @@
 
 ;;; Candidate generation
 
-(defun completion--commands (prefix)
+(defun completion--commands (prefix &key clean-prefix-p)
   "Command name candidates matching PREFIX.
    Returns (values candidates displays)."
-  (let* ((clean   (escape-remove prefix))
+  (let* ((clean   (if clean-prefix-p prefix (escape-remove prefix)))
          (matches (sort (remove-duplicates
                          (remove-if-not (lambda (name)
                                           (string-prefix-p clean name))
@@ -168,16 +168,32 @@
     (values (mapcar #'completion--escape matches)
             (mapcar #'completion--display matches))))
 
-(defun completion--files (prefix)
+(defun completion--files
+    (prefix &key literal-leading-tilde-p clean-prefix-p)
   "File path candidates matching PREFIX. Directories complete with a
-   trailing slash. Returns (values candidates displays)."
-  (let* ((clean          (escape-remove prefix))
+   trailing slash. Returns (values candidates displays).
+
+LITERAL-LEADING-TILDE-P keeps a quoted or explicitly escaped leading tilde
+relative instead of interpreting it as the user's home directory. A leading
+backslash in the ordinary raw PREFIX is detected automatically.
+CLEAN-PREFIX-P says shell escapes have already been removed."
+  (let* ((literal-leading-tilde-p
+           (or literal-leading-tilde-p
+               (and (> (length prefix) 1)
+                    (char= (char prefix 0) #\\)
+                    (char= (char prefix 1) #\~))))
+         (clean          (if clean-prefix-p prefix (escape-remove prefix)))
          (slash          (position #\/ clean :from-end t))
          (directory-part (if slash (subseq clean 0 (1+ slash)) ""))
          (base           (if slash (subseq clean (1+ slash)) clean))
-         (list-root      (tilde-expand (if (string= directory-part "")
-                                           "."
-                                           directory-part)))
+         (list-root      (let ((root (if (string= directory-part "")
+                                         "."
+                                         directory-part)))
+                           (if literal-leading-tilde-p
+                               (if (string-prefix-p "~/" root)
+                                   (concatenate 'string "./" root)
+                                   root)
+                               (tilde-expand root))))
          (pairs          nil))
     (flet ((consider (name directory-p)
              (when (and (string-prefix-p base name)
@@ -187,7 +203,8 @@
                       (escaped (completion--escape
                                 (concatenate 'string directory-part name)
                                 :escape-leading-tilde
-                                (string= directory-part ""))))
+                                (or literal-leading-tilde-p
+                                    (string= directory-part "")))))
                  (push (cons (concatenate 'string escaped tail)
                              (concatenate 'string
                                           (completion--display name)
@@ -248,6 +265,614 @@ paths. Ordinary non-executable files are excluded."
         (sort matches #'string<)))))
 
 
+;;; Declarative command arguments
+
+(defstruct (completion-candidate
+            (:constructor make-completion-candidate
+                (&key insertion display description kind)))
+  "One rich semantic completion before the legacy editor boundary.
+
+INSERTION is shell-safe replacement text, DISPLAY is its concise label,
+DESCRIPTION is optional explanatory text and KIND identifies the semantic
+provider. COMPLETE-LINE deliberately continues to return insertion and display
+string lists so existing Clinedi and library callers remain compatible."
+  (insertion   "" :type string)
+  (display     "" :type string)
+  (description nil :type (or null string))
+  (kind        nil))
+
+(defun completion--candidate-values (records)
+  "Flatten rich completion RECORDS into legacy candidates and displays."
+  (values
+   (mapcar #'completion-candidate-insertion records)
+   (mapcar (lambda (record)
+             (completion--described-display
+              (completion-candidate-display record)
+              (completion-candidate-description record)))
+           records)))
+
+(defun completion--candidate-records
+    (candidates displays kind &optional description)
+  "Pair legacy CANDIDATES and DISPLAYS as rich records of semantic KIND."
+  (loop for candidate in candidates
+        for display in displays
+        collect (make-completion-candidate
+                 :insertion candidate
+                 :display display
+                 :description description
+                 :kind kind)))
+
+(defun completion--group-start (group)
+  "Return the first source index covered by argument token GROUP."
+  (token-start (first group)))
+
+(defun completion--group-end (group)
+  "Return the exclusive source index covered by argument token GROUP."
+  (token-end (first (last group))))
+
+(defun completion--group-at-cursor (groups cursor)
+  "Return the argument token group containing CURSOR, or NIL.
+
+The exclusive end of a group remains part of it for completion purposes, so
+Tab immediately after a word completes that word instead of starting another."
+  (find-if (lambda (group)
+             (and (<= (completion--group-start group) cursor)
+                  (<= cursor (completion--group-end group))))
+           groups))
+
+(defun completion--group-value (buffer group)
+  "Return GROUP's safely expanded string and whether its argv size is known.
+
+Environment variables, tilde notation and quotes may be expanded because they
+do not run user code. Lisp substitutions and an unquoted glob can produce an
+unknown number of words, so they make the second value false."
+  (when (find ':lisp group :key #'token-type)
+    (return-from completion--group-value (values nil nil)))
+  (when (and (null (rest group))
+             (eq (token-type (first group)) ':word))
+    (let* ((text (token-text buffer (first group)))
+           (expanded
+             (variable-expand (tilde-expand text) :keep-escapes t)))
+      ;; A variable can introduce a wildcard even when the source token has
+      ;; none. Execution may then produce several argv entries, so semantic
+      ;; completion must not guess the following positional index.
+      (when (glob-pattern-p expanded)
+        (return-from completion--group-value (values nil nil)))))
+  (handler-case
+      (values
+       (apply #'concatenate 'string
+              (mapcar (lambda (token)
+                        (token-expand buffer token))
+                      group))
+       t)
+    (serious-condition ()
+      (values nil nil))))
+
+(defun completion--groups-before-cursor (groups current cursor)
+  "Return complete argument GROUPS preceding CURRENT at CURSOR."
+  (loop for group in groups
+        until (eq group current)
+        while (<= (completion--group-end group) cursor)
+        collect group))
+
+(defun completion--group-prefix (buffer group cursor)
+  "Return GROUP's semantic prefix, replacement start and usability flag.
+
+A quoted or compound group is completed only at its end, where replacing the
+whole expression with a freshly escaped candidate cannot leave unmatched
+syntax behind. Completion inside any group is conservative because Clinedi
+replaces only the text through CURSOR and would otherwise retain a stale
+suffix. The fourth value says whether a leading tilde was quoted or escaped."
+  (cond ((and group (< cursor (completion--group-end group)))
+         (values nil cursor nil nil))
+        ((null group)
+         (values "" cursor t nil))
+        ((and (null (rest group))
+              (eq (token-type (first group)) ':word))
+         (let* ((start (token-start (first group)))
+                (raw   (subseq buffer start cursor)))
+           (handler-case
+               (values (escape-remove raw)
+                       start
+                       t
+                       (and (> (length raw) 1)
+                            (char= (char raw 0) #\\)
+                            (char= (char raw 1) #\~)))
+             (serious-condition ()
+               (values nil cursor nil nil)))))
+        ((= cursor (completion--group-end group))
+         (multiple-value-bind (value certain-p)
+             (completion--group-value buffer group)
+           (let ((start (completion--group-start group)))
+             (values value start certain-p
+                     (and (< start (length buffer))
+                          (member (char buffer start) '(#\" #\'))
+                          t)))))
+        (t
+         (values nil cursor nil nil))))
+
+(defun completion--option-long-name (argument)
+  "Return ARGUMENT's declared long option name."
+  (let ((name (command-argument-long-name argument)))
+    (when name
+      (princ-to-string name))))
+
+(defun completion--option-arguments (command)
+  "Return COMMAND's declarative option arguments in definition order."
+  (remove-if-not (lambda (argument)
+                   (eq (command-argument-kind argument) ':option))
+                 (command-arguments command)))
+
+(defun completion--long-option (options name)
+  "Find the option in OPTIONS whose long name is NAME."
+  (find-if (lambda (argument)
+             (let ((long-name (completion--option-long-name argument)))
+               (and long-name (string= name long-name))))
+           options))
+
+(defun completion--short-option (options name)
+  "Find the option in OPTIONS whose short name is character NAME."
+  (find-if (lambda (argument)
+             (let ((short-name (command-argument-short-name argument)))
+               (and short-name (char= name short-name))))
+           options))
+
+(defun completion--boolean-option-p (argument)
+  "True when ARGUMENT is a flag that consumes no value."
+  (eq (command-argument-value-type argument) ':boolean))
+
+(defun completion--argument-description (argument)
+  "Return ARGUMENT's one-line documentation, or NIL."
+  (let ((documentation (command-argument-documentation argument)))
+    (when documentation
+      (subseq documentation 0 (or (position #\newline documentation)
+                                  (length documentation))))))
+
+(defun completion--described-display (label description)
+  "Return a safe completion display combining LABEL and DESCRIPTION."
+  (let ((safe-label (completion--display label)))
+    (if (and description (plusp (length description)))
+        (format nil "~a  ~a" safe-label (completion--display description))
+        safe-label)))
+
+(defun completion--option-spellings (argument)
+  "Return the short and long command-line spellings for ARGUMENT."
+  (let ((short (command-argument-short-name argument))
+        (long  (completion--option-long-name argument)))
+    (append (and short (list (format nil "-~c" short)))
+            (and long (list (concatenate 'string "--" long))))))
+
+(defun completion--option-candidates (command prefix used-options)
+  "Return option candidates and descriptive displays matching PREFIX."
+  (let ((records nil))
+    (dolist (argument (completion--option-arguments command))
+      (when (or (command-argument-repeating-p argument)
+                (not (member argument used-options :test #'eq)))
+        (let* ((spellings   (completion--option-spellings argument))
+               (description (completion--argument-description argument))
+               (aliases     (format nil "~{~a~^, ~}" spellings)))
+          (dolist (spelling spellings)
+            (when (string-prefix-p prefix spelling)
+              (push (make-completion-candidate
+                     :insertion spelling
+                     :display aliases
+                     :description description
+                     :kind ':option)
+                    records))))))
+    (when (string-prefix-p prefix "--help")
+      (push (make-completion-candidate
+             :insertion "--help"
+             :display "--help"
+             :description "Show command help."
+             :kind ':help)
+            records))
+    (setf records
+          (sort (remove-duplicates
+                 records :test #'string=
+                         :key #'completion-candidate-insertion)
+                #'string< :key #'completion-candidate-insertion))
+    (completion--candidate-values records)))
+
+(defun completion--directory-candidates
+    (prefix &key literal-leading-tilde-p description clean-prefix-p)
+  "Return only directory path candidates matching PREFIX."
+  (multiple-value-bind (candidates displays)
+      (completion--files
+       prefix
+       :literal-leading-tilde-p literal-leading-tilde-p
+       :clean-prefix-p clean-prefix-p)
+    (completion--candidate-values
+     (loop for candidate in candidates
+           for display in displays
+           when (and (plusp (length candidate))
+                     (char= (char candidate (1- (length candidate))) #\/))
+             collect (make-completion-candidate
+                      :insertion candidate
+                      :display display
+                      :description description
+                      :kind ':directory)))))
+
+(defun completion--package-candidates (prefix &optional description)
+  "Return package-name and nickname candidates matching PREFIX."
+  (let ((records nil))
+    (dolist (package (list-all-packages))
+      (dolist (name (cons (package-name package) (package-nicknames package)))
+        (let ((candidate (string-downcase name)))
+          (when (and (string-prefix-p (string-downcase prefix) candidate)
+                     (not (find candidate records :test #'string=
+                                :key #'completion-candidate-display)))
+            (push (make-completion-candidate
+                   :insertion (completion--escape candidate)
+                   :display candidate
+                   :description description
+                   :kind ':package)
+                  records)))))
+    (setf records
+          (sort records #'string< :key #'completion-candidate-display))
+    (completion--candidate-values records)))
+
+(defun completion--environment-names ()
+  "Return sorted environment-variable names without exposing their values."
+  (sort
+   (remove-duplicates
+    (loop for entry in (environment-variables)
+          for equals = (position #\= entry)
+          when equals
+            collect (subseq entry 0 equals))
+    :test #'string=)
+   #'string<))
+
+(defun completion--environment-candidates (prefix &optional description)
+  "Return environment-variable name candidates matching PREFIX."
+  (completion--candidate-values
+   (loop for name in (completion--environment-names)
+         when (string-prefix-p prefix name)
+           collect (make-completion-candidate
+                    :insertion (completion--escape name)
+                    :display name
+                    :description description
+                    :kind ':environment-variable))))
+
+(defun completion--job-description (job)
+  "Return a single-line status and command description for JOB."
+  (format nil "~:(~a~)  ~a" (job-status job) (job-command job)))
+
+(defun completion--job-candidates (prefix &optional description)
+  "Return current job selectors matching PREFIX with useful descriptions."
+  (let* ((ordered (jobs--ordered))
+         (current (first ordered))
+         (previous (second ordered))
+         (records nil))
+    (labels ((consider (spelling job)
+               (when (and job (string-prefix-p prefix spelling))
+                 (push (make-completion-candidate
+                        :insertion (completion--escape spelling)
+                        :display spelling
+                        :description (or (completion--job-description job)
+                                         description)
+                        :kind ':job)
+                       records))))
+      (consider "%+" current)
+      (consider "%-" previous)
+      (dolist (job (sort (copy-list *jobs*) #'< :key #'job-id))
+        (consider (format nil "%~d" (job-id job)) job)))
+    (setf records
+          (sort (remove-duplicates
+                 records :test #'string=
+                         :key #'completion-candidate-insertion)
+                #'string< :key #'completion-candidate-insertion))
+    (completion--candidate-values records)))
+
+(defun completion--provider-values
+    (values descriptions prefix kind &optional fallback-description)
+  "Turn raw provider VALUES into escaped candidates matching PREFIX.
+
+DESCRIPTIONS, when supplied, runs parallel to VALUES. Non-string values are
+printed readably enough for shell argument insertion."
+  (let* ((items (cond ((null values) nil)
+                      ((stringp values) (list values))
+                      ((typep values 'sequence) (coerce values 'list))
+                      (t (list values))))
+         (notes (cond ((null descriptions) nil)
+                      ((stringp descriptions) (list descriptions))
+                      ((typep descriptions 'sequence)
+                       (coerce descriptions 'list))
+                      (t (list descriptions))))
+         (records nil))
+    (loop for item in items
+          for note = (and notes (pop notes))
+          do (if (completion-candidate-p item)
+                 (when (string-prefix-p
+                        prefix
+                        (escape-remove
+                         (completion-candidate-insertion item)))
+                   (push (make-completion-candidate
+                          :insertion
+                          (completion-candidate-insertion item)
+                          :display
+                          (completion-candidate-display item)
+                          :description
+                          (or (completion-candidate-description item)
+                              (and note (princ-to-string note))
+                              fallback-description)
+                          :kind (or (completion-candidate-kind item) kind))
+                         records))
+                 (let ((raw (command--argument-value-string item)))
+                   (when (string-prefix-p prefix raw)
+                     (push (make-completion-candidate
+                            :insertion (completion--escape raw)
+                            :display raw
+                            :description (or (and note (princ-to-string note))
+                                             fallback-description)
+                            :kind kind)
+                           records)))))
+    (setf records
+          (sort (remove-duplicates
+                 records :test #'string=
+                         :key #'completion-candidate-insertion)
+                #'string< :key #'completion-candidate-insertion))
+    (completion--candidate-values records)))
+
+(defun completion--call-provider (argument context)
+  "Call ARGUMENT's custom completion provider and contain its failures."
+  (handler-case
+      (multiple-value-bind (values descriptions)
+          (funcall (command-argument-completion-function argument)
+                   argument context)
+        (completion--provider-values
+         values descriptions (command-completion-context-prefix context)
+         (let ((kind (command-argument-value-type argument)))
+           (if (keywordp kind) kind ':custom))
+         (completion--argument-description argument)))
+    (serious-condition ()
+      (values nil nil))))
+
+(defun completion--choice-candidates (argument context)
+  "Return static or dynamic choice candidates for ARGUMENT and CONTEXT."
+  (handler-case
+      (completion--provider-values
+       (command-argument-choice-values argument context)
+       nil
+       (command-completion-context-prefix context)
+       ':choice
+       (completion--argument-description argument))
+    (serious-condition ()
+      (values nil nil))))
+
+(defun completion--argument-candidates
+    (argument context &key literal-leading-tilde-p)
+  "Return semantic candidates and displays for ARGUMENT in CONTEXT."
+  (cond ((command-argument-completion-function argument)
+         (completion--call-provider argument context))
+        ((or (command-argument-choices argument)
+             (eq (command-argument-value-type argument) ':choice))
+         (completion--choice-candidates argument context))
+        ((member (command-argument-value-type argument) '(:path :pathname))
+         (multiple-value-bind (candidates displays)
+             (completion--files
+              (command-completion-context-prefix context)
+              :literal-leading-tilde-p literal-leading-tilde-p
+              :clean-prefix-p t)
+           (completion--candidate-values
+            (completion--candidate-records
+             candidates displays ':path
+             (completion--argument-description argument)))))
+        ((eq (command-argument-value-type argument) ':directory)
+         (completion--directory-candidates
+          (command-completion-context-prefix context)
+          :literal-leading-tilde-p literal-leading-tilde-p
+          :description (completion--argument-description argument)
+          :clean-prefix-p t))
+        ((eq (command-argument-value-type argument) ':command)
+         (multiple-value-bind (candidates displays)
+             (completion--commands
+              (command-completion-context-prefix context)
+              :clean-prefix-p t)
+           (completion--candidate-values
+            (completion--candidate-records
+             candidates displays ':command
+             (completion--argument-description argument)))))
+        ((eq (command-argument-value-type argument) ':package)
+         (completion--package-candidates
+          (command-completion-context-prefix context)
+          (completion--argument-description argument)))
+        ((member (command-argument-value-type argument)
+                 '(:environment :environment-variable))
+         (completion--environment-candidates
+          (command-completion-context-prefix context)
+          (completion--argument-description argument)))
+        ((eq (command-argument-value-type argument) ':job)
+         (completion--job-candidates
+          (command-completion-context-prefix context)
+          (completion--argument-description argument)))
+        (t
+         (values nil nil))))
+
+(defun completion--active-short-value (options prefix)
+  "Return an attached value option, value start and preceding flag options.
+
+The second value is the character index after the value-taking option. NIL
+means PREFIX is not an attached short option value."
+  (let ((used nil))
+    (when (and (> (length prefix) 1)
+               (char= (char prefix 0) #\-)
+               (not (string-prefix-p "--" prefix)))
+      (loop for index from 1 below (length prefix)
+            for option = (completion--short-option options (char prefix index))
+            do (unless option
+                 (return (values nil nil nil)))
+               (if (completion--boolean-option-p option)
+                   (push option used)
+                   (return (values option (1+ index) (nreverse used))))))))
+
+(defun completion--positional-prefix-p (argument prefix)
+  "True when PREFIX has execution's positional treatment despite leading -."
+  (and argument
+       (eq (command-argument-kind argument) ':positional)
+       (or (string= prefix "-")
+           (and (member (command-argument-value-type argument)
+                        '(:integer :number))
+                (command--read-number prefix)
+                t))))
+
+(defun completion--literal-leading-tilde-source-p (buffer start cursor)
+  "True when source text from START quotes or escapes a possible tilde."
+  (and (< start cursor)
+       (or (member (char buffer start) '(#\" #\'))
+           (and (< (1+ start) cursor)
+                (char= (char buffer start) #\\)
+                (char= (char buffer (1+ start)) #\~)))
+       t))
+
+(defun completion--argument-context
+    (command argument words used-options positional-index prefix buffer cursor)
+  "Construct the callback context for one active declarative ARGUMENT."
+  (make-command-completion-context
+   :command command
+   :argument argument
+   :words words
+   :used-options used-options
+   :positional-index positional-index
+   :prefix prefix
+   :buffer buffer
+   :cursor cursor))
+
+(defun completion--declared-arguments (buffer cursor groups current)
+  "Complete a declarative builtin argument at CURSOR.
+
+Return START, candidates, displays and a handled flag. A false handled flag
+asks the caller to retain legacy file completion for external commands and
+builtins without an argument declaration."
+  (let ((before (completion--groups-before-cursor groups current cursor)))
+    (when (null before)
+      (return-from completion--declared-arguments
+        (values cursor nil nil nil)))
+    (multiple-value-bind (head certain-p)
+        (completion--group-value buffer (first before))
+      (unless certain-p
+        (return-from completion--declared-arguments
+          (values cursor nil nil nil)))
+      (multiple-value-bind (kind command)
+          (command-resolve head)
+        (unless (and (eq kind ':builtin)
+                     (command-declarative-arguments-p command))
+          (return-from completion--declared-arguments
+            (values cursor nil nil nil)))
+        (let ((words nil))
+          (dolist (group (rest before))
+            (multiple-value-bind (word known-size-p)
+                (completion--group-value buffer group)
+              (unless known-size-p
+                (return-from completion--declared-arguments
+                  (values cursor nil nil t)))
+              (push word words)))
+          (setf words (nreverse words))
+          (when (command--help-request-p command words)
+            (return-from completion--declared-arguments
+              (values cursor nil nil t)))
+          (multiple-value-bind
+                (prefix start usable-p literal-leading-tilde-p)
+              (completion--group-prefix buffer current cursor)
+            (unless usable-p
+              (return-from completion--declared-arguments
+                (values cursor nil nil t)))
+            (let ((context
+                    (handler-case
+                        (command-arguments-context
+                         command words
+                         :prefix prefix :buffer buffer :cursor cursor)
+                      (serious-condition () nil))))
+              (unless context
+                (return-from completion--declared-arguments
+                  (values cursor nil nil t)))
+              (let* ((options
+                       (completion--option-arguments command))
+                     (options-enabled
+                       (command-completion-context-options-enabled-p context))
+                     (used-options
+                       (command-completion-context-used-options context))
+                     (positional-index
+                       (command-completion-context-positional-index context))
+                     (active-argument
+                       (command-completion-context-argument context))
+                     (pending-option-p
+                       (and active-argument
+                            (eq (command-argument-kind active-argument)
+                                ':option)))
+                     (long-equals
+                       (and options-enabled
+                            (string-prefix-p "--" prefix)
+                            (position #\= prefix :start 2)))
+                     (long-option
+                       (and long-equals
+                            (completion--long-option
+                             options (subseq prefix 2 long-equals)))))
+                (cond
+                  (pending-option-p
+                   (multiple-value-bind (candidates displays)
+                       (completion--argument-candidates
+                        active-argument context
+                        :literal-leading-tilde-p literal-leading-tilde-p)
+                     (values start candidates displays t)))
+                  ((and long-option
+                        (not (completion--boolean-option-p long-option)))
+                   (let* ((source-equals
+                            (position #\= buffer :start start :end cursor))
+                          (value-prefix (subseq prefix (1+ long-equals)))
+                          (value-start (if source-equals
+                                           (1+ source-equals)
+                                           (+ start long-equals 1)))
+                          (value-context
+                            (completion--argument-context
+                             command long-option words used-options
+                             positional-index value-prefix buffer cursor)))
+                     (multiple-value-bind (candidates displays)
+                         (completion--argument-candidates
+                          long-option value-context
+                          :literal-leading-tilde-p
+                          (completion--literal-leading-tilde-source-p
+                           buffer value-start cursor))
+                       (values value-start candidates displays t))))
+                  ((completion--positional-prefix-p active-argument prefix)
+                   (multiple-value-bind (candidates displays)
+                       (completion--argument-candidates
+                        active-argument context
+                        :literal-leading-tilde-p literal-leading-tilde-p)
+                     (values start candidates displays t)))
+                  ((and options-enabled
+                        (string-prefix-p "-" prefix))
+                   (multiple-value-bind
+                         (short-option value-index short-used-options)
+                       (completion--active-short-value options prefix)
+                     (if short-option
+                         (let* ((value-prefix (subseq prefix value-index))
+                                (value-start (+ start value-index))
+                                (value-context
+                                  (completion--argument-context
+                                   command short-option words
+                                   (append used-options short-used-options)
+                                   positional-index value-prefix buffer cursor)))
+                           (multiple-value-bind (candidates displays)
+                               (completion--argument-candidates
+                                short-option value-context
+                                :literal-leading-tilde-p
+                                (completion--literal-leading-tilde-source-p
+                                 buffer value-start cursor))
+                             (values value-start candidates displays t)))
+                         (multiple-value-bind (candidates displays)
+                             (completion--option-candidates
+                              command prefix used-options)
+                           (values start candidates displays t)))))
+                  (active-argument
+                   (multiple-value-bind (candidates displays)
+                       (completion--argument-candidates
+                        active-argument context
+                        :literal-leading-tilde-p literal-leading-tilde-p)
+                     (values start candidates displays t)))
+                  (t
+                   (values start nil nil t)))))))))))
+
+
 ;;; Entry point
 
 (defun completion--token-at (tokens cursor)
@@ -280,13 +905,36 @@ paths. Ordinary non-executable files are excluded."
             (multiple-value-bind (start prefix command-position-p)
                 (completion--command-span buffer cursor)
               (cond ((null start)
-                     (values cursor nil nil))
+                     (let* ((tokens  (lex-command-line buffer))
+                            (groups  (token-groups tokens))
+                            (current-group
+                              (completion--group-at-cursor groups cursor)))
+                       (multiple-value-bind
+                             (argument-start candidates displays handled-p)
+                           (completion--declared-arguments
+                            buffer cursor groups current-group)
+                         (if handled-p
+                             (values argument-start candidates displays)
+                             (values cursor nil nil)))))
                     ((and command-position-p (not (find #\/ prefix)))
                      (completion--commands-with-start start prefix))
                     (t
-                     (multiple-value-bind (candidates displays)
-                         (completion--files prefix)
-                       (values start candidates displays)))))))))
+                     (let* ((tokens  (lex-command-line buffer))
+                            (groups  (token-groups tokens))
+                            (current-group
+                              (completion--group-at-cursor groups cursor)))
+                       (multiple-value-bind
+                             (argument-start candidates displays handled-p)
+                           (completion--declared-arguments
+                            buffer cursor groups current-group)
+                         (if handled-p
+                             (values argument-start candidates displays)
+                             (multiple-value-bind
+                                   (file-candidates file-displays)
+                                 (completion--files prefix)
+                               (values start
+                                       file-candidates
+                                       file-displays))))))))))))
 
 (defun completion--commands-with-start (start prefix)
   "Command and directory candidates wrapped with replacement START."

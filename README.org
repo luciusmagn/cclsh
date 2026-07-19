@@ -319,6 +319,14 @@ CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
   "Short git status."
   (run "git" "status" "--short"))
 
+;; Optional metadata drives parsing, completion and generated help.
+(defcommand deploy (directory &key force)
+  "Deploy a directory."
+  (:arguments
+   (directory :type :directory :help "Source directory.")
+   (force :type :boolean :short #\f :help "Replace existing output."))
+  (format t "deploying ~a~:[~; forcibly~]~%" directory force))
+
 ;; Optional ranked directory navigation
 (zoxide-setup)
 ;; z project       ; query zoxide and cd to the result
@@ -337,6 +345,14 @@ compose with pipelines, redirection and job control.
 
 =*last-status*= holds the exit status of the last command.
 
+The =:arguments= declaration is opt-in. Required, optional, repeating and
+keyword parameters follow the Lisp lambda list; keyword parameters become
+long options and may have short spellings. Semantic types, choices and custom
+providers drive argument-aware Tab completion. =:convert t= opts into typed
+values, while existing commands without a declaration keep receiving raw
+strings. Declared commands support =COMMAND --help=, and =help COMMAND= renders
+generated help from the same metadata.
+
 By the way, this cuts both ways: once this checkout is visible to ASDF or
 Quicklisp, any Clozure Common Lisp program can =(ql:quickload :cclsh)= and
 call =run=, =pipe=, =capture= and friends directly, without starting the
@@ -351,7 +367,10 @@ C-f at the end accepts it. Multi-line history entries retain their
 newlines. Alt-Enter, or Shift-Enter in terminals that report it, inserts an
 explicit newline without submitting. Tab completes command names plus
 directories at a slash-free command position, file paths in path-shaped
-command words and arguments, and Lisp symbols. Command-position directories
+command words and undeclared arguments, and Lisp symbols. Declared commands
+complete option names with descriptions and choose semantic providers for
+paths, directories, commands, packages, environment variables, jobs and
+choices. Command-position directories
 keep the trailing =/= that makes them implicit =cd= paths. Supported keys:
 C-a/C-e (home/end), Ctrl-Left/Right (move by
 words), C-k/C-u (kill to end/whole line), C-w or C-Backspace/C-h (kill word),
@@ -362,8 +381,14 @@ strings yellow, comments and parens dim, keywords magenta, numbers cyan.
 Output that ends without a newline gets a reverse video ⏎ marker, fish style.
 The =help= builtin prints the built-in manual (=help substitution= etc.). The
 same manual is available outside the shell as =cclsh help= or
-=cclsh help SECTION=; =docs/guide.org= is the long form, including login shell
-setup.
+=cclsh help SECTION=. =help COMMAND= shows generated command help.
+
+Clinedi's programmable keymap is exported as =*line-editor-keymap*= for
+=startup.lisp= customization. For example,
+=(clinedi:keymap-bind *line-editor-keymap* :word-right :right)= remaps the
+decoded Ctrl-Right event without changing Clinedi's defaults. The
+=docs/guide.org= file is the long form, including the declarative argument API,
+keymap layering and login shell setup.
 
 * Design notes
 

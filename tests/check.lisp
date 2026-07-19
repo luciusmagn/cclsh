@@ -90,6 +90,422 @@
   (write-string "after|")
   0)
 
+(defvar *check-declared-command-call* nil
+  "Arguments observed by CHECK-DECLARED-COMMAND.")
+
+(defvar *check-declared-choice-context* nil
+  "Last completion context received while resolving dynamic choices.")
+
+(defun check-declared-choices (argument context)
+  "Return dynamic format choices and retain callback inputs."
+  (setf *check-declared-choice-context* (list argument context))
+  '("text" "json"))
+
+(defun check-declared-completion (argument context)
+  "Return a completion fixture for declarative metadata checks."
+  (declare (ignore argument context))
+  (values '("fixture") '("test completion")))
+
+(defun check-declared-converter (argument context)
+  "Convert context text while proving the custom callback contract."
+  (list (cclsh:command-completion-context-prefix context)
+        (cclsh:command-argument-name argument)
+        (cclsh:command-name
+         (cclsh:command-completion-context-command context))))
+
+(cclsh:defcommand check-declared-command
+    (source &optional (mode "safe" mode-p)
+            &key (count 1 count-p) verbose dry-run format tag)
+  "Exercise declarative command parsing."
+  (:arguments
+   (source :type :directory
+           :help "Source directory."
+           :completion #'check-declared-completion)
+   (mode :choices ("safe" "fast") :convert t :help "Operating mode.")
+   (count :type :integer :convert t :short #\n :help "Repeat count.")
+   (verbose :type :boolean :short #\v :help "Enable verbose output.")
+   (dry-run :type :boolean :short #\d :help "Do not make changes.")
+   (format :choices check-declared-choices :convert t :short #\f
+           :help "Output format.")
+   (tag :converter #'check-declared-converter :help "Attach a tag."))
+  (setf *check-declared-command-call*
+        (list source mode mode-p count count-p verbose dry-run format tag))
+  37)
+
+(defvar *check-declared-rest-call* nil
+  "Arguments observed by CHECK-DECLARED-REST.")
+
+(cclsh:defcommand check-declared-rest (head &rest tail)
+  "Exercise required and repeating positional parsing."
+  (:arguments
+   (head :type :integer :convert t :help "First number.")
+   (tail :type :number :convert t :help "Remaining numbers."))
+  (setf *check-declared-rest-call* (cons head tail))
+  19)
+
+(defvar *check-semantic-command-call* nil
+  "Converted semantic values observed by CHECK-SEMANTIC-COMMAND.")
+
+(cclsh:defcommand check-semantic-command (path package-name program)
+  "Exercise path, package and command semantic conversion."
+  (:arguments
+   (path :type :path :convert t)
+   (package-name :type :package :convert t)
+   (program :type :command :convert t))
+  (setf *check-semantic-command-call* (list path package-name program))
+  29)
+
+(defvar *check-runtime-semantic-call* nil
+  "Converted environment name and job observed by CHECK-RUNTIME-SEMANTIC.")
+
+(cclsh:defcommand check-runtime-semantic (variable job)
+  "Exercise environment-name and job semantic conversion."
+  (:arguments
+   (variable :type :environment-variable :convert t)
+   (job :type :job :convert t))
+  (setf *check-runtime-semantic-call* (list variable job))
+  30)
+
+(defvar *check-declared-keyword-call* nil
+  "Arguments observed by CHECK-DECLARED-KEYWORD.")
+
+(cclsh:defcommand check-declared-keyword
+    (&key ((:output destination) "stdout" destination-p) required)
+  "Exercise an explicit keyword name and a required short-only option."
+  (:arguments
+   (destination :type :string :help "Output destination.")
+   (required :type :string :required t :short #\r :long nil
+             :help "Required marker."))
+  (setf *check-declared-keyword-call*
+        (list destination destination-p required))
+  31)
+
+
+;;;; -- Declarative commands --
+
+(let ((arguments (cclsh:command-arguments check-declared-command)))
+  (check-equal "declarative metadata is marked as declared"
+               t
+               (cclsh:command-declarative-arguments-p
+                check-declared-command))
+  (check-equal "declarative metadata preserves lambda-list order"
+               '(source mode count verbose dry-run format tag)
+               (mapcar #'cclsh:command-argument-name arguments))
+  (check-equal "required positional metadata"
+               '(:positional t nil :directory)
+               (let ((argument (first arguments)))
+                 (list (cclsh:command-argument-kind argument)
+                       (cclsh:command-argument-required-p argument)
+                       (cclsh:command-argument-repeating-p argument)
+                       (cclsh:command-argument-value-type argument))))
+  (check-equal "optional positional metadata"
+               '(:positional nil :choice)
+               (let ((argument (second arguments)))
+                 (list (cclsh:command-argument-kind argument)
+                       (cclsh:command-argument-required-p argument)
+                       (cclsh:command-argument-value-type argument))))
+  (check-equal "value option metadata"
+               '(:option #\n "count" :integer t)
+               (let ((argument (third arguments)))
+                 (list (cclsh:command-argument-kind argument)
+                       (cclsh:command-argument-short-name argument)
+                       (cclsh:command-argument-long-name argument)
+                       (cclsh:command-argument-value-type argument)
+                       (cclsh:command-argument-convert-p argument))))
+  (check-equal "custom completion metadata remains callable"
+               t
+               (functionp
+                (cclsh:command-argument-completion-function
+                 (first arguments)))))
+
+(dolist (case
+          '(("required lambda parameters cannot be weakened"
+             (cclsh:defcommand check-invalid-optional (value)
+               (:arguments (value :required nil))
+               value))
+            ("metavariables must be strings"
+             (cclsh:defcommand check-invalid-metavariable (value)
+               (:arguments (value :metavariable 12))
+               value))
+            ("argument properties cannot be repeated"
+             (cclsh:defcommand check-duplicate-property (value)
+               (:arguments (value :type :string :type :integer))
+               value))
+            ("completion callbacks must be function designators"
+             (cclsh:defcommand check-invalid-completion (value)
+               (:arguments (value :completion 12))
+               value))
+            ("converter callbacks must be function designators"
+             (cclsh:defcommand check-invalid-converter (value)
+               (:arguments (value :converter "not a function"))
+               value))
+            ("choices must be a list or function designator"
+             (cclsh:defcommand check-invalid-choices (value)
+               (:arguments (value :choices "not choices"))
+               value))
+            ("long options cannot be empty"
+             (cclsh:defcommand check-invalid-long-empty (&key value)
+               (:arguments (value :long ""))
+               value))
+            ("long options cannot begin with a dash"
+             (cclsh:defcommand check-invalid-long-dash (&key value)
+               (:arguments (value :long "-value"))
+               value))
+            ("long options cannot contain whitespace"
+             (cclsh:defcommand check-invalid-long-space (&key value)
+               (:arguments (value :long "bad value"))
+               value))
+            ("long options cannot contain equals"
+             (cclsh:defcommand check-invalid-long-equals (&key value)
+               (:arguments (value :long "bad=value"))
+               value))
+            ("short options cannot be a dash"
+             (cclsh:defcommand check-invalid-short-dash (&key value)
+               (:arguments (value :short #\-))
+               value))
+            ("short options cannot be whitespace"
+             (cclsh:defcommand check-invalid-short-space (&key value)
+               (:arguments (value :short #\Space))
+               value))))
+  (destructuring-bind (name definition) case
+    (check-equal
+     name t
+     (handler-case
+         (progn
+           (eval definition)
+           nil)
+       (error ()
+         t)))))
+
+(check-equal "legacy command metadata remains advisory"
+             nil
+             (cclsh:command-declarative-arguments-p check-stage-arguments))
+(setf *check-stage-arguments* nil)
+(check-equal "legacy command invocation retains raw option-like strings"
+             23
+             (cclsh::command-execute-builtin
+              check-stage-arguments '("--unknown" "-1")))
+(check-equal "legacy command receives unparsed arguments"
+             '("--unknown" "-1")
+             *check-stage-arguments*)
+(setf *check-stage-arguments* nil)
+(check-equal "legacy command receives a raw --help argument"
+             23
+             (cclsh::command-execute-builtin
+              check-stage-arguments '("--help" "tail")))
+(check-equal "legacy --help invocation enters the command body"
+             '("--help" "tail")
+             *check-stage-arguments*)
+(check-equal "legacy generated help does not advertise automatic help"
+             nil
+             (search "--help"
+                     (cclsh:command-help-string check-stage-arguments)))
+
+(setf *check-declared-choice-context* nil)
+(check-equal "long, attached, grouped and converted options execute"
+             37
+             (cclsh::command-execute-builtin
+              check-declared-command
+              '("src" "--count=3" "-vd" "-fjson" "--tag" "release")))
+(check-equal "declared invocation reconstructs defaults and supplied flags"
+             '("src" "safe" nil 3 t t t "json"
+               ("release" tag check-declared-command))
+             *check-declared-command-call*)
+(check-equal "dynamic choices receive argument and stable context"
+             '(format check-declared-command "json")
+             (let ((argument (first *check-declared-choice-context*))
+                   (context  (second *check-declared-choice-context*)))
+               (list (cclsh:command-argument-name argument)
+                     (cclsh:command-name
+                      (cclsh:command-completion-context-command context))
+                     (cclsh:command-completion-context-prefix context))))
+
+(let ((output (make-string-output-stream)))
+  (let ((*standard-output* output))
+    (check-equal "--help consumed as an option value reaches the body"
+                 37
+                 (cclsh::command-execute-builtin
+                  check-declared-command '("src" "--tag" "--help"))))
+  (check-equal "option-value --help does not render generated help"
+               ""
+               (get-output-stream-string output)))
+(check-equal "custom converter receives --help as its raw option value"
+             '("src" "safe" nil 1 nil nil nil nil
+               ("--help" tag check-declared-command))
+             *check-declared-command-call*)
+
+(check-equal "spaced short option value executes"
+             37
+             (cclsh::command-execute-builtin
+              check-declared-command '("src" "fast" "-n" "4")))
+(check-equal "spaced option value and explicit false boolean convert"
+             37
+             (cclsh::command-execute-builtin
+              check-declared-command
+              '("src" "--verbose=false" "--format" "text")))
+(check-equal "explicit false boolean reaches the command body"
+             '("src" "safe" nil 1 nil nil nil "text" nil)
+             *check-declared-command-call*)
+
+(check-equal "declared command remains directly callable from Lisp"
+             37
+             (check-declared-command "direct" "fast"
+                                     :count 7 :verbose t))
+(check-equal "direct Lisp call preserves ordinary lambda-list semantics"
+             '("direct" "fast" t 7 t t nil nil nil)
+             *check-declared-command-call*)
+
+(check-equal "explicit Lisp keyword name becomes the default long option"
+             31
+             (cclsh::command-execute-builtin
+              check-declared-keyword '("--output" "file" "-r" "yes")))
+(check-equal "declared invoker reconstructs explicit keyword bindings"
+             '("file" t "yes")
+             *check-declared-keyword-call*)
+(check-equal "explicit keyword command remains directly callable"
+             31
+             (check-declared-keyword :output "lisp" :required "yes"))
+(check-equal "direct explicit keyword call keeps its supplied flag"
+             '("lisp" t "yes")
+             *check-declared-keyword-call*)
+
+(let ((error-output (make-string-output-stream)))
+  (let ((*error-output* error-output))
+    (check-equal "required short-only option fails when absent"
+                 2
+                 (cclsh::command-execute-builtin
+                  check-declared-keyword nil)))
+  (check-equal "required short-only diagnostic names its usable spelling"
+               t
+               (not (null (search "-r"
+                                  (get-output-stream-string error-output))))))
+
+(check-equal "generated help identifies required options"
+             t
+             (not (null (search "Required."
+                                (cclsh:command-help-string
+                                 check-declared-keyword)))))
+
+(check-equal "required and repeating positionals convert"
+             19
+             (cclsh::command-execute-builtin
+              check-declared-rest '("-1" "2.5" "3")))
+(check-equal "negative numeric positional is not parsed as an option"
+             '(-1 2.5 3)
+             *check-declared-rest-call*)
+(check-equal "option terminator permits option-shaped positionals"
+             19
+             (cclsh::command-execute-builtin
+              check-declared-rest '("1" "--" "-2")))
+(check-equal "option terminator values reach repeating positional"
+             '(1 -2)
+             *check-declared-rest-call*)
+
+(let ((*package* (find-package '#:cclsh-user)))
+  (check-equal "path, package and command semantic values convert"
+               29
+               (cclsh::command-execute-builtin
+                check-semantic-command '("relative/path" "cl" "help"))))
+(check-equal "path semantic conversion returns a pathname"
+             (pathname "relative/path")
+             (first *check-semantic-command-call*))
+(check-equal "package semantic conversion resolves a package"
+             (find-package '#:cl)
+             (second *check-semantic-command-call*))
+(check-equal "command semantic conversion resolves a command object"
+             cclsh:help
+             (third *check-semantic-command-call*))
+
+(let* ((job (cclsh::job-make :command "check semantic job"))
+       (cclsh::*jobs* (list job)))
+  (setf (cclsh::job-id job) 71)
+  (check-equal "environment and job semantic values convert"
+               30
+               (cclsh::command-execute-builtin
+                check-runtime-semantic '("PATH" "%71")))
+  (check-equal "environment semantic conversion keeps the variable name"
+               "PATH"
+               (first *check-runtime-semantic-call*))
+  (check-equal "job semantic conversion resolves a live job object"
+               job
+               (second *check-runtime-semantic-call*)))
+
+(let ((*error-output* (make-broadcast-stream))
+      (*package* (find-package '#:cclsh-user)))
+  (check-equal "unknown package conversion fails"
+               2
+               (cclsh::command-execute-builtin
+                check-semantic-command
+                '("path" "no-such-check-package" "help")))
+  (check-equal "unknown command conversion fails"
+               2
+               (cclsh::command-execute-builtin
+                check-semantic-command
+                '("path" "cl" "no-such-check-command")))
+  (let ((cclsh::*jobs* nil))
+    (check-equal "unknown job conversion fails"
+                 2
+                 (cclsh::command-execute-builtin
+                  check-runtime-semantic '("PATH" "%9999")))))
+
+(dolist (case
+          '(("missing required positional" nil)
+            ("unknown long option" ("src" "--wat"))
+            ("unknown short option" ("src" "-x"))
+            ("missing option value" ("src" "--count"))
+            ("duplicate option" ("src" "-v" "--verbose"))
+            ("invalid integer" ("src" "--count" "many"))
+            ("invalid static choice" ("src" "unsafe"))
+            ("invalid dynamic choice" ("src" "--format" "xml"))))
+  (destructuring-bind (name arguments) case
+    (let ((*error-output* (make-broadcast-stream)))
+      (check-equal name 2
+                   (cclsh::command-execute-builtin
+                    check-declared-command arguments)))))
+
+(let ((*check-declared-command-call* ':untouched)
+      (output (make-string-output-stream)))
+  (let ((*standard-output* output))
+    (check-equal "--help returns success" 0
+                 (cclsh::command-execute-builtin
+                  check-declared-command '("--help")))
+    (let ((help (get-output-stream-string output)))
+      (check-equal "generated help has usage"
+                   t
+                   (not (null (search "Usage: check-declared-command" help))))
+      (check-equal "generated help has option spelling"
+                   t
+                   (not (null (search "-n COUNT, --count COUNT" help))))
+      (check-equal "generated help has argument prose"
+                   t
+                   (not (null (search "Source directory." help))))))
+  (check-equal "--help does not enter the command body"
+               ':untouched
+               *check-declared-command-call*))
+
+(let ((output (make-string-output-stream)))
+  (let ((*standard-output* output))
+    (check-equal "help COMMAND returns success" 0
+                 (cclsh:help "check-declared-command")))
+  (check-equal "help COMMAND renders generated help"
+               t
+               (not (null
+                     (search "Usage: check-declared-command"
+                             (get-output-stream-string output))))))
+
+(let ((output (make-string-output-stream)))
+  (let ((*standard-output* output))
+    (check-equal "manual section wins over command help" 0
+                 (cclsh:help "jobs")))
+  (check-equal "manual collision does not render command usage"
+               nil
+               (search "Usage: jobs" (get-output-stream-string output))))
+
+(let ((*error-output* (make-broadcast-stream)))
+  (check-equal "unknown help subject remains status one"
+               1
+               (cclsh:help "definitely-not-a-help-subject")))
+
 
 ;;;; -- Clinedi boundary --
 
@@ -99,6 +515,9 @@
 (check-equal "Clinedi supplies Unicode cell geometry"
              2
              (clinedi:text-cell-width "猫"))
+(check-equal "CCLSH owns a configurable Clinedi keymap"
+             t
+             (typep cclsh:*line-editor-keymap* 'clinedi:keymap))
 
 (check-equal "library load leaves terminal signal policy unclaimed"
              nil
@@ -1286,6 +1705,527 @@
       (ignore-errors
         (cclsh::pipeline--abort-tasks group :signal 9))
       (ignore-errors (ccl:join-process thread)))))
+
+
+;;;; -- Declarative argument completion --
+
+(defvar *check-completion-context* nil
+  "Last context received by the declarative completion test callback.")
+
+(defvar *check-completion-side-effect* nil
+  "Sentinel proving completion does not evaluate Lisp substitutions.")
+
+(defun check-completion-dynamic-choices (argument context)
+  "Return context-sensitive choices for completion regression checks."
+  (declare (ignore argument context))
+  '("east" "west"))
+
+(defun check-completion-custom-provider (argument context)
+  "Record CONTEXT and return candidates with parallel descriptions."
+  (declare (ignore argument))
+  (setf *check-completion-context* context)
+  (values '("custom alpha" "custom-beta")
+          '("First custom choice" "Second custom choice")))
+
+(defun check-completion-failing-provider (argument context)
+  "Signal an injected provider failure that interactive completion must contain."
+  (declare (ignore argument context))
+  (error "injected completion provider failure"))
+
+(defun check-completion-rich-provider (argument context)
+  "Return one rich candidate through the public semantic record protocol."
+  (declare (ignore argument context))
+  (list (cclsh:make-completion-candidate
+         :insertion "rich\\ value"
+         :display "rich value"
+         :description "A rich provider value."
+         :kind ':demonstration)))
+
+(defun check-completion-negative-provider (argument context)
+  "Return negative integers to distinguish them from option prefixes."
+  (declare (ignore argument context))
+  '("-10" "-20"))
+
+(cclsh:defcommand cclsh-user::check-completion-declarative
+    (mode &key output directory verbose quiet dynamic custom failing
+               rich package-name program environment job count label)
+  "Expose every declarative completion kind to the regression suite."
+  (:arguments
+   (mode         :choices ("fast" "safe" "two words" :turbo)
+                 :help "Execution mode.")
+   (output       :type :pathname :short #\o
+                 :help "Output path.")
+   (directory    :type :directory
+                 :help "Working directory.")
+   (verbose      :type :boolean :short #\v
+                 :help "Print detailed progress.")
+   (quiet        :type :boolean :short #\q
+                 :help "Suppress ordinary output.")
+   (dynamic      :choices #'check-completion-dynamic-choices
+                 :short #\d :help "A dynamic direction.")
+   (custom       :completion #'check-completion-custom-provider
+                 :short #\c :help "A provider-defined value.")
+   (failing      :completion #'check-completion-failing-provider
+                 :help "A deliberately failing provider.")
+   (rich         :completion #'check-completion-rich-provider
+                 :help "A rich provider-defined value.")
+   (package-name :type :package :help "A loaded Lisp package.")
+   (program      :type :command :help "A shell command.")
+   (environment  :type :environment-variable
+                 :help "An environment-variable name.")
+   (job          :type :job :help "A shell job selector.")
+   (count        :type :integer :help "An integer without candidates.")
+   (label        :type :string :help "A string without candidates."))
+  (declare (ignore mode output directory verbose quiet dynamic custom failing
+                   rich package-name program environment job count label))
+  0)
+
+(cclsh:defcommand cclsh-user::check-completion-repeat (&rest modes)
+  "Expose a repeating positional choice to completion."
+  (:arguments
+   (modes :choices ("alpha" "beta") :help "One or more modes."))
+  (declare (ignore modes))
+  0)
+
+(cclsh:defcommand cclsh-user::check-completion-negative (number)
+  "Expose a numeric positional with a custom semantic provider."
+  (:arguments
+   (number :type :integer :completion #'check-completion-negative-provider
+           :help "A negative integer."))
+  (declare (ignore number))
+  0)
+
+(cclsh:defcommand cclsh-user::check-completion-legacy (&rest arguments)
+  "Retain generic file completion without an :ARGUMENTS declaration."
+  (declare (ignore arguments))
+  0)
+
+(defun check-completion (line &optional (cursor (length line)))
+  "Return COMPLETE-LINE's values for LINE in the interactive user package."
+  (let ((*package* (find-package '#:cclsh-user)))
+    (multiple-value-list (cclsh::complete-line line cursor))))
+
+(defun check-completion-candidate-p (candidate result)
+  "True when CANDIDATE appears in completion RESULT."
+  (not (null (member candidate (second result) :test #'string=))))
+
+(let* ((command "check-completion-declarative")
+       (choice-line (format nil "~a f" command))
+       (choice-result (check-completion choice-line)))
+  (check-equal "positional choices use the active argument"
+               t
+               (check-completion-candidate-p "fast" choice-result))
+  (let* ((spaced-line (format nil "~a t" command))
+         (spaced-result (check-completion spaced-line)))
+    (check-equal "choice completion escapes shell separators"
+                 t
+                 (check-completion-candidate-p "two\\ words" spaced-result))
+    (check-equal "escaped choice completion preserves its argument"
+                 '("two words")
+                 (cclsh::command-line-words "two\\ words")))
+  (let ((symbol-result
+          (check-completion (format nil "~a :" command))))
+    (check-equal "symbol choices retain their printed argument syntax"
+                 t
+                 (check-completion-candidate-p ":TURBO" symbol-result)))
+  (let* ((quoted-line (format nil "~a ~cf" command #\"))
+         (quoted-result (check-completion quoted-line)))
+    (check-equal "open quoted argument completes from the whole safe group"
+                 (1+ (length command))
+                 (first quoted-result))
+    (check-equal "open quoted choice includes its semantic candidate"
+                 t
+                 (check-completion-candidate-p "fast" quoted-result)))
+  (let* ((earlier-line (format nil "~a f --verbose" command))
+         (cursor (+ (length command) 2))
+         (earlier-result (check-completion earlier-line cursor)))
+    (check-equal "completion parses only words preceding an earlier cursor"
+                 t
+                 (check-completion-candidate-p "fast" earlier-result)))
+  (let* ((inside-line (format nil "~a fast" command))
+         (cursor (1- (length inside-line)))
+         (inside-result (check-completion inside-line cursor)))
+    (check-equal "completion inside an argument does not retain a stale suffix"
+                 nil
+                 (second inside-result)))
+  (let ((interspersed-result
+          (check-completion (format nil "~a --verbose f" command))))
+    (check-equal "interspersed options retain the next positional argument"
+                 t
+                 (check-completion-candidate-p
+                  "fast" interspersed-result)))
+  (let ((terminated-choice-result
+          (check-completion (format nil "~a -- f" command))))
+    (check-equal "the option terminator retains positional completion"
+                 t
+                 (check-completion-candidate-p
+                  "fast" terminated-choice-result))))
+
+(let* ((command "check-completion-declarative")
+       (option-result (check-completion (format nil "~a --v" command)))
+       (option-index (position "--verbose" (second option-result)
+                               :test #'string=)))
+  (check-equal "long option completion uses declarative names"
+               t
+               (not (null option-index)))
+  (check-equal "option completion displays declarative help"
+               t
+               (and option-index
+                    (not (null
+                          (search "Print detailed progress."
+                                  (nth option-index (third option-result)))))))
+  (let ((short-result (check-completion (format nil "~a -v" command))))
+    (check-equal "short option completion uses declarative names"
+                 t
+                 (check-completion-candidate-p "-v" short-result)))
+  (let ((help-result (check-completion (format nil "~a --h" command))))
+    (check-equal "generated help participates in option completion"
+                 t
+                 (check-completion-candidate-p "--help" help-result))
+    (check-equal "generated help completion has a description"
+                 t
+                 (not (null
+                       (search "Show command help."
+                               (first (third help-result)))))))
+  (let ((used-result
+          (check-completion (format nil "~a --verbose --v" command))))
+    (check-equal "non-repeating used options are not offered again"
+                 nil
+                 (member "--verbose" (second used-result) :test #'string=)))
+  (let ((terminated-result
+          (check-completion (format nil "~a -- --v" command))))
+    (check-equal "option terminator prevents later option completion"
+                 nil
+                 (member "--verbose" (second terminated-result)
+                         :test #'string=)))
+  (let ((value-result
+          (check-completion (format nil "~a fast --output -- -" command))))
+    (check-equal "double dash consumed as a value leaves options enabled"
+                 t
+                 (check-completion-candidate-p "--verbose" value-result)))
+  (let ((help-value-result
+          (check-completion
+           (format nil "~a fast --output --help --v" command))))
+    (check-equal "--help consumed as an option value does not suppress completion"
+                 t
+                 (check-completion-candidate-p
+                  "--verbose" help-value-result))))
+
+(let* ((command "check-completion-declarative")
+       (dynamic-line (format nil "~a fast --dynamic e" command))
+       (dynamic-result (check-completion dynamic-line)))
+  (check-equal "dynamic choice functions supply option values"
+               t
+               (check-completion-candidate-p "east" dynamic-result))
+  (setf *check-completion-context* nil)
+  (let* ((custom-line
+           (format nil "~a fast --verbose --custom custom" command))
+         (custom-result (check-completion custom-line))
+         (context *check-completion-context*)
+         (custom-index (position "custom\\ alpha" (second custom-result)
+                                 :test #'string=)))
+    (check-equal "custom providers return safely escaped candidates"
+                 t
+                 (not (null custom-index)))
+    (check-equal "custom provider descriptions reach the selector display"
+                 t
+                 (and custom-index
+                      (not (null
+                            (search "First custom choice"
+                                    (nth custom-index
+                                         (third custom-result)))))))
+    (check-equal "custom provider receives the active prefix"
+                 "custom"
+                 (cclsh:command-completion-context-prefix context))
+    (check-equal "custom provider receives preceding command words"
+                 '("fast" "--verbose" "--custom")
+                 (cclsh:command-completion-context-words context))
+    (check-equal "custom provider receives the positional index"
+                 1
+                 (cclsh:command-completion-context-positional-index context))
+    (check-equal "pending option is the provider's active argument"
+                 'custom
+                 (cclsh:command-argument-name
+                  (cclsh:command-completion-context-argument context)))
+    (check-equal "custom provider receives completed used options"
+                 '(verbose)
+                 (mapcar #'cclsh:command-argument-name
+                         (cclsh:command-completion-context-used-options
+                          context))))
+  (let ((failing-result
+          (check-completion (format nil "~a fast --failing x" command))))
+    (check-equal "provider failures degrade to no candidates"
+                 nil
+                 (second failing-result)))
+  (setf *check-completion-context* nil)
+  (let* ((attached-result
+           (check-completion (format nil "~a fast -qvccustom" command)))
+         (attached-context *check-completion-context*))
+    (check-equal "an attached custom value keeps its semantic candidates"
+                 t
+                 (check-completion-candidate-p
+                  "custom\\ alpha" attached-result))
+    (check-equal "grouped flags before an attached value enter provider context"
+                 '(quiet verbose)
+                 (mapcar #'cclsh:command-argument-name
+                         (cclsh:command-completion-context-used-options
+                          attached-context))))
+  (let* ((rich-result
+           (check-completion (format nil "~a fast --rich rich" command)))
+         (rich-index
+           (position "rich\\ value" (second rich-result) :test #'string=)))
+    (check-equal "rich provider records preserve insertion text"
+                 t
+                 (not (null rich-index)))
+    (check-equal "rich provider records preserve descriptions"
+                 t
+                 (and rich-index
+                      (not (null
+                            (search "A rich provider value."
+                                    (nth rich-index
+                                         (third rich-result)))))))))
+
+(let ((repeat-result
+        (check-completion "check-completion-repeat alpha b")))
+  (check-equal "repeating positional arguments remain active"
+               t
+               (check-completion-candidate-p "beta" repeat-result)))
+
+(let ((minus-result
+        (check-completion "check-completion-negative -"))
+      (negative-result
+        (check-completion "check-completion-negative -1")))
+  (check-equal "a lone dash follows execution's positional treatment"
+               t
+               (check-completion-candidate-p "-10" minus-result))
+  (check-equal "negative numeric prefixes do not become short options"
+               t
+               (check-completion-candidate-p "-10" negative-result)))
+
+(let ((package-result
+        (check-completion
+         "check-completion-declarative fast --package-name cclsh-"))
+      (command-result
+        (check-completion
+         "check-completion-declarative fast --program reh"))
+      (integer-result
+        (check-completion
+         "check-completion-declarative fast --count 1"))
+      (string-result
+        (check-completion
+         "check-completion-declarative fast --label x")))
+  (check-equal "package arguments complete loaded packages"
+               t
+               (check-completion-candidate-p "cclsh-user" package-result))
+  (check-equal "command arguments complete shell commands"
+               t
+               (check-completion-candidate-p "rehash" command-result))
+  (check-equal "semantic candidate displays include argument help"
+               t
+               (not (null
+                     (find-if (lambda (display)
+                                (search "A shell command." display))
+                              (third command-result)))))
+  (check-equal "integer arguments intentionally have no candidates"
+               nil
+               (second integer-result))
+  (check-equal "string arguments intentionally have no candidates"
+               nil
+               (second string-result)))
+
+(let* ((name "CCLSH_COMPLETION_AUDIT_NAME")
+       (old-value (cclsh:getenv name)))
+  (unwind-protect
+      (progn
+        (cclsh:setenv name "not displayed")
+        (let ((result
+                (check-completion
+                 "check-completion-declarative fast --environment CCLSH_COMPLETION_A")))
+          (check-equal "environment arguments complete variable names"
+                       t
+                       (check-completion-candidate-p name result))
+          (check-equal "environment completion does not expose values"
+                       nil
+                       (find-if (lambda (display)
+                                  (search "not displayed" display))
+                                (third result)))))
+    (if old-value
+        (cclsh:setenv name old-value)
+        (cclsh::unsetenv name))))
+
+(let* ((current (cclsh::job-make :command "sleep current"))
+       (previous (cclsh::job-make :command "sleep previous")))
+  (setf (cclsh::job-id current) 7
+        (cclsh::job-status current) ':running
+        (cclsh::job-touched current) 20
+        (cclsh::job-id previous) 3
+        (cclsh::job-status previous) ':running
+        (cclsh::job-touched previous) 10)
+  (let* ((cclsh::*jobs* (list current previous))
+         (result
+           (check-completion
+            "check-completion-declarative fast --job %"))
+         (current-index (position "%+" (second result) :test #'string=)))
+    (check-equal "job arguments complete the current selector"
+                 t
+                 (not (null current-index)))
+    (check-equal "job arguments complete the previous selector"
+                 t
+                 (check-completion-candidate-p "%-" result))
+    (check-equal "job arguments complete numeric selectors"
+                 t
+                 (and (check-completion-candidate-p "%7" result)
+                      (check-completion-candidate-p "%3" result)))
+    (check-equal "job completion describes status and command"
+                 t
+                 (and current-index
+                      (not (null
+                            (search "sleep current"
+                                    (nth current-index
+                                         (third result)))))))))
+
+(let ((package (make-package "CCLSH CHECK COMPLETION PACKAGE" :use nil)))
+  (unwind-protect
+      (let ((result
+              (check-completion
+               "check-completion-declarative fast --package-name cclsh\\ check")))
+        (check-equal "package candidates escape shell word separators"
+                     t
+                     (check-completion-candidate-p
+                      "cclsh\\ check\\ completion\\ package" result)))
+    (delete-package package)))
+
+(let* ((root
+         (format nil "/tmp/cclsh-check-completion-~d/"
+                 (ccl:external-call "getpid" :int)))
+       (file           (concatenate 'string root "sample target.txt"))
+       (backslash-file (concatenate 'string root "back\\slash.txt"))
+       (directory      (concatenate 'string root "sample-dir/"))
+       (literal-file   (concatenate 'string root "~/literal target.txt"))
+       (glob-first     (concatenate 'string root "glob-one"))
+       (glob-second    (concatenate 'string root "glob-two"))
+       (old-directory  (ccl:current-directory))
+       (old-defaults   *default-pathname-defaults*)
+       (old-home       (cclsh:getenv "HOME"))
+       (glob-variable  "CCLSH_COMPLETION_AUDIT_GLOB")
+       (old-glob       (cclsh:getenv glob-variable)))
+  (unwind-protect
+      (progn
+        (check-write-utf8-file file "completion")
+        ;; CCL pathname syntax treats a backslash as an escape. Create this
+        ;; POSIX filename through an argv boundary so the byte remains literal.
+        (uiop:run-program (list "/usr/bin/touch" backslash-file))
+        (check-write-utf8-file literal-file "literal tilde")
+        (check-write-utf8-file glob-first "first")
+        (check-write-utf8-file glob-second "second")
+        (ensure-directories-exist (concatenate 'string directory ".keep"))
+        (setf (ccl:current-directory) root
+              *default-pathname-defaults* (pathname root))
+        (cclsh:setenv "HOME" (string-right-trim "/" root))
+        (cclsh:setenv glob-variable "glob-*")
+        (let* ((long-line
+                 "check-completion-declarative fast --output=sample")
+               (long-result (check-completion long-line)))
+          (check-equal "long equals values replace only text after equals"
+                       (1+ (position #\= long-line))
+                       (first long-result))
+          (check-equal "pathname arguments complete escaped files"
+                       t
+                       (check-completion-candidate-p
+                        "sample\\ target.txt" long-result)))
+        (let ((backslash-result
+                (check-completion
+                 "check-completion-declarative fast --output=back\\\\sl")))
+          (check-equal "declared paths preserve an escaped literal backslash"
+                       t
+                       (check-completion-candidate-p
+                        "back\\\\slash.txt" backslash-result)))
+        (let ((tilde-result
+                (check-completion
+                 "check-completion-declarative fast --output=~/sample")))
+          (check-equal "pathname completion preserves tilde spelling"
+                       t
+                       (check-completion-candidate-p
+                        "~/sample\\ target.txt" tilde-result)))
+        (let ((escaped-tilde-result
+                (check-completion
+                 "check-completion-declarative fast --output=\\~/literal"))
+              (quoted-tilde-result
+                (check-completion
+                 "check-completion-declarative fast --output=\"~/literal")))
+          (check-equal "escaped tilde completion remains relative"
+                       t
+                       (check-completion-candidate-p
+                        "\\~/literal\\ target.txt" escaped-tilde-result))
+          (check-equal "quoted tilde completion remains relative"
+                       t
+                       (check-completion-candidate-p
+                        "\\~/literal\\ target.txt" quoted-tilde-result)))
+        (let* ((short-line
+                 "check-completion-declarative fast -qvosam")
+               (short-result (check-completion short-line)))
+          (check-equal "grouped shorts find the attached value replacement"
+                       (search "sam" short-line :from-end t)
+                       (first short-result))
+          (check-equal "attached short values use semantic completion"
+                       t
+                       (check-completion-candidate-p
+                        "sample\\ target.txt" short-result)))
+        (let ((directory-result
+                (check-completion
+                 "check-completion-declarative fast --directory sample")))
+          (check-equal "directory arguments include directories"
+                       t
+                       (check-completion-candidate-p
+                        "sample-dir/" directory-result))
+          (check-equal "directory arguments exclude ordinary files"
+                       nil
+                       (member "sample\\ target.txt"
+                               (second directory-result)
+                               :test #'string=)))
+        (let ((legacy-result
+                (check-completion "check-completion-legacy sample")))
+          (check-equal "legacy commands retain generic file completion"
+                       t
+                       (check-completion-candidate-p
+                        "sample\\ target.txt" legacy-result)))
+        (let ((external-result (check-completion "cat sample")))
+          (check-equal "external commands retain generic file completion"
+                       t
+                       (check-completion-candidate-p
+                        "sample\\ target.txt" external-result)))
+        (let ((glob-result
+                (check-completion
+                 (format nil
+                         "check-completion-declarative $~a "
+                         glob-variable))))
+          (check-equal "a variable-introduced glob suppresses positional guesses"
+                       nil
+                       (second glob-result))))
+    (ignore-errors
+      (setf (ccl:current-directory) old-directory
+            *default-pathname-defaults* old-defaults))
+    (if old-home
+        (cclsh:setenv "HOME" old-home)
+        (cclsh::unsetenv "HOME"))
+    (if old-glob
+        (cclsh:setenv glob-variable old-glob)
+        (cclsh::unsetenv glob-variable))
+    (ignore-errors
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist ':ignore))))
+
+(setf *check-completion-side-effect* nil)
+(let ((result
+        (check-completion
+         "check-completion-declarative (progn (setf *check-completion-side-effect* t) \"fast\") ")))
+  (check-equal "argument completion never evaluates Lisp substitutions"
+               nil
+               *check-completion-side-effect*)
+  (check-equal "unknown substitution argv size suppresses semantic guesses"
+               nil
+               (second result)))
 
 
 ;;;; -- Result --

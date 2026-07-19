@@ -130,12 +130,41 @@ function:
 
   (defcommand mkcd (directory)
     \"Create DIRECTORY and enter it.\"
+    (:arguments
+      (directory :type :directory :help \"Directory to create.\"))
     (run \"mkdir\" \"-p\" directory)
     (cd directory))
 
   gs                       from the command line
   (gs)                     and from Lisp
   (mkcd \"/tmp/scratch\")
+
+An :arguments declaration makes the lambda list self-describing.
+Required and optional parameters are positional, &rest repeats, and
+&key parameters become long options:
+
+  (defcommand deploy (source &key force jobs)
+    \"Deploy SOURCE.\"
+    (:arguments
+      (source :type :directory :help \"Source tree.\")
+      (force :type :boolean :short #\\f :help \"Replace output.\")
+      (jobs :type :integer :convert t :short #\\j
+            :help \"Worker count.\"))
+    ...)
+
+  deploy src -f -j4
+  deploy --help
+  help deploy
+
+Metadata drives option parsing, generated help and semantic Tab
+completion. :convert t opts into typed values; without it types are
+advisory and values remain strings. :choices accepts a list or dynamic
+function, and :completion installs a custom provider. Providers may return
+simple values with optional descriptions, or completion-candidate records
+with shell-ready insertion, display, description and semantic kind fields.
+Existing commands without a declaration retain raw string arguments. Unknown
+or malformed declared arguments return status 2 without entering the command
+body.
 
 An integer return value becomes the exit status, anything else means
 0. Three ways to run programs from Lisp:
@@ -239,8 +268,11 @@ Lisp.")
 
     ("editing" "keys, completion and colors"
      "At a slash-free command position, Tab completes command names and
-directories. It completes file paths after a slash and in arguments,
-and Lisp symbols in Lisp mode or inside a substitution. Directories end
+directories. For a declared command it completes options with descriptions
+and uses the active argument's path, directory, command, package, environment,
+job, choice or custom provider. It understands option values, grouped short flags,
+--long=value and --. Undeclared commands retain generic file completion.
+Lisp symbols complete in Lisp mode or inside a substitution. Directories end
 with /, making command-position matches ready for implicit cd, and
 special characters get escaped:
 
@@ -272,6 +304,14 @@ functions so future context additions remain compatible.
   C-d                  delete forward, or exit on an empty line
   Alt-Enter            insert a newline without submitting
   Shift-Enter          same when the terminal reports modified Enter
+
+Clinedi key bindings are programmable from startup.lisp through
+*line-editor-keymap*. Events and built-in commands use semantic keywords:
+
+  (clinedi:keymap-bind *line-editor-keymap* :word-right :right)
+
+Use clinedi:make-keymap with :parent for a layer or copy-keymap for a
+detached map. The CCLSH default is private to this image.
 
 Colors: external commands green, builtins and valid implicit directory
 paths cyan, unknown red, lone bound variables magenta, strings yellow,
@@ -329,6 +369,7 @@ configured command strings in cclsh-user:
   (defcommand la (&rest arguments)
     \"Long listing including hidden files.\"
     (apply #'run \"ls\" \"-la\" arguments))
+  (clinedi:keymap-bind *line-editor-keymap* :word-right :right)
   (defvar *project* \"~/common-lisp/cclsh\")
   (zoxide-setup)
 
@@ -532,7 +573,7 @@ Emergency access past broken user state:
       (format t "  ~a~a~%"
               (terminal-colorize (format nil "~14a" name) ':cyan)
               one-liner)))
-  (format t "~%help SECTION or cclsh help SECTION prints details.~%~
+  (format t "~%help TOPIC or cclsh help TOPIC prints a section or command.~%~
              commands lists what is callable, --version identifies the build,~%~
              and docs/guide.org is the long form.~%"))
 
@@ -543,7 +584,7 @@ Emergency access past broken user state:
         (progn
           (format *error-output* "~a~%"
                   (terminal-colorize
-                   (format nil "help: no section ~a; sections are ~{~a~^, ~}"
+                   (format nil "help: no section or command ~a; manual sections are ~{~a~^, ~}"
                            name
                            (mapcar #'first *manual-sections*))
                    ':red))
@@ -556,13 +597,21 @@ Emergency access past broken user state:
           t))))
 
 (defcommand help (&rest sections)
-  "Show the built-in manual. help SECTION elaborates on one topic."
+  "Show the built-in manual or generated command help."
   (if (null sections)
       (progn
         (manual--print-overview)
         0)
       (let ((status 0))
         (dolist (section sections status)
-          (unless (manual--print-section
-                   (string-downcase (princ-to-string section)))
-            (setf status 1))))))
+          (let ((name (string-downcase (princ-to-string section))))
+            (cond ((assoc name *manual-sections* :test #'string-equal)
+                   (manual--print-section name))
+                  (t
+                   (multiple-value-bind (kind command)
+                       (command-resolve name)
+                     (if (eq kind ':builtin)
+                         (command-print-help command)
+                         (progn
+                           (manual--print-section name)
+                           (setf status 1)))))))))))

@@ -332,6 +332,8 @@ from Lisp as an ordinary function:
 
 (defcommand mkcd (directory)
   "Create DIRECTORY and change into it."
+  (:arguments
+   (directory :type :directory :help "Directory to create."))
   (run "mkdir" "-p" directory)
   (cd directory))
 #+end_src
@@ -342,6 +344,84 @@ value becomes its exit status; any other value means 0. =run= executes
 one program in the foreground and returns its exit status; arguments
 are stringified with =princ-to-string=, so numbers and pathnames are
 fine.
+
+An =:arguments= declaration immediately after the docstring makes a command
+self-describing. It follows the ordinary Lisp lambda list: required and
+=&optional= parameters are positional, =&rest= is repeating, and =&key=
+parameters are options whose long name defaults to the lowercase parameter
+name. For example:
+
+#+begin_src lisp
+(defcommand deploy (source &optional (mode "safe")
+                     &key force (jobs 1))
+  "Deploy SOURCE."
+  (:arguments
+   (source :type :directory :help "Source tree to deploy.")
+   (mode :choices ("safe" "fast") :convert t
+         :help "Deployment strategy.")
+   (force :type :boolean :short #\f
+          :help "Replace an existing deployment.")
+   (jobs :type :integer :convert t :short #\j :metavariable "COUNT"
+         :help "Parallel worker count."))
+  (format t "~a from ~a with ~d worker~:p~%" mode source jobs)
+  (when force
+    (format t "replacement enabled~%")))
+#+end_src
+
+The command line then accepts =deploy src fast -f -j4=,
+=--jobs 4= and =--jobs=4=. Boolean short options can be grouped, and =--=
+ends option parsing. Unknown options, missing values, duplicate non-repeating
+options and missing required arguments return status 2 without entering the
+command body. The ordinary Lisp function is unchanged, so
+=(deploy "src" "fast" :force t :jobs 4)= uses normal Common Lisp calling
+conventions.
+
+Argument properties are:
+
+- =:type= for =:string=, =:boolean=, =:integer=, =:number=, =:path= or =:pathname=,
+  =:directory=, =:command=, =:package=, =:environment-variable=, =:job=,
+  =:choice=, or a conversion function;
+- =:short= and =:long= for option spellings, =:metavariable= for help text,
+  =:help= for the argument description, and =:required t= to require an
+  otherwise optional positional or option argument;
+- =:choices= for a list or a function receiving =(argument context)=;
+- =:completion= for a function receiving =(argument context)= and returning
+  candidates plus optional parallel descriptions as a second value. A
+  provider which needs separate insertion, display, description and semantic
+  kind fields may instead return =make-completion-candidate= records. Their
+  insertion text must already be shell-safe;
+- =:convert t= to turn strings into the declared type and validate choices;
+- =:converter= for a custom =(argument context)= conversion function. The
+  current raw text is =command-completion-context-prefix=.
+
+Types are advisory unless conversion is requested; boolean options are always
+mapped to Lisp booleans. This lets metadata improve help and completion without
+silently changing string arguments. Existing =defcommand= forms without an
+=:arguments= declaration retain their exact raw argument behavior.
+
+With conversion enabled, path kinds become pathnames, packages and commands
+resolve to their live objects, environment-variable names remain strings, and
+job specifications resolve through the current job table. The latter therefore
+fails cleanly when the named job is no longer live.
+
+Completion and dynamic choice functions can inspect the command, active
+argument, complete preceding words, already used options, positional index,
+whether options remain enabled, prefix, buffer and cursor through the exported
+=command-completion-context-*= readers. Completion callback errors are
+contained and simply produce no candidates, so a transient provider failure
+does not break the editor.
+
+Simple provider values are converted to strings and shell-escaped by CCLSH.
+A rich =completion-candidate= retains its =insertion=, =display=,
+=description= and =kind= fields. The exported constructor, predicate and
+=completion-candidate-*= readers let application code produce and inspect that
+protocol without depending on editor presentation details.
+
+Every declared command supports =COMMAND --help=. =help COMMAND= renders
+generated usage, argument and option reference for any Lisp command. Existing
+manual section names take precedence when a section and command have the same
+name, so =help jobs= continues to show the fuller job-control chapter. Legacy
+commands do not intercept =--help=, preserving their exact raw argv behavior.
 
 Normally, =run= creates its own foreground job. When called synchronously by a
 =defcommand= which is executing as a =pipe= or =capture= builtin stage, it
@@ -576,10 +656,16 @@ used to replace it.
 or modifyOtherKeys sequences.
 
 At a slash-free command position, Tab completes command names (=PATH=
-executables plus defined commands) and directories. It completes file paths
-after a slash and in arguments, and Lisp symbols in Lisp mode, including
-=:keywords=. Directories complete with a trailing =/=, which makes a
-command-position directory ready for implicit =cd=, and spaces get escaped. A
+executables plus defined commands) and directories. For self-describing
+commands it also understands the active positional or option value: options
+are displayed with their help, choices may be static or dynamic, and path,
+directory, command, package, environment-variable and job arguments use
+semantic providers. It honors
+grouped short options, attached values, =--long=value= and =--=. Commands
+without declarations retain generic file completion. Lisp symbols complete in
+Lisp mode, including =:keywords=. Directories complete with a trailing =/=,
+which makes a command-position directory ready for implicit =cd=, and spaces
+get escaped. A
 unique match inserts itself, several matches extend to their common prefix,
 and pressing Tab again opens a width-measured candidate grid. Arrow keys
 navigate the grid and Tab cycles candidates. Escape restores the original
@@ -652,6 +738,23 @@ The package environment is synchronized before this function runs. The last
 command status is dynamically protected while it runs, so prompt helpers
 cannot accidentally replace it.
 
+Clinedi key bindings are configured through =*line-editor-keymap*=. Keymap
+events are the semantic names returned by Clinedi's decoder, such as =:left=,
+=:word-right=, =:kill-line= and =:complete=. Commands use the same stable names;
+a custom function receives the incremental editor and original event and
+returns an editor action and optional payload. For example, this makes the
+decoded Ctrl-Right event perform ordinary one-grapheme right motion:
+
+#+begin_src lisp
+(clinedi:keymap-bind *line-editor-keymap* :word-right :right)
+#+end_src
+
+Use =clinedi:make-keymap= with =:parent= for a layer, or
+=clinedi:copy-keymap= for a completely detached copy. =keymap-unbind= removes
+only a local override, revealing an inherited binding when one exists. CCLSH's
+default map is private to its image, so startup customizations do not mutate
+Clinedi's defaults or another editor.
+
 * Quicklisp and scripting
 
 Every saved cclsh image includes Quicklisp and the pinned Clinedi line editor, so
@@ -692,11 +795,12 @@ The built-in manual is also available as a stateless command-line action:
 #+begin_src sh
 cclsh help
 cclsh help scripting
+cclsh help cd
 #+end_src
 
-It accepts the same section arguments and returns the same status as =help=
-inside the shell. Use =cclsh -- help argument= or =cclsh ./help argument= to
-run a script file literally named =help= instead.
+It accepts the same manual sections or command names and returns the same
+status as =help= inside the shell. Use =cclsh -- help argument= or
+=cclsh ./help argument= to run a script file literally named =help= instead.
 
 Use a configured command string when the command needs aliases, PATH changes
 or other definitions from =startup.lisp=:

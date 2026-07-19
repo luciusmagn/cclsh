@@ -43,7 +43,7 @@
         name = "clinedi-${builtins.substring 0 7 clinediRev}";
         url = "https://github.com/luciusmagn/clinedi.git";
         rev = clinediRev;
-        hash = "sha256-UjHC3eQYp2USZAmq7eIg3+5qgYUlPWFWrRj8A53BuKM=";
+        hash = "sha256-hF6JIxDd8wCuv9n0cXp1klyempiry594vk5jeE2a/xI=";
         leaveDotGit = true;
       };
 
