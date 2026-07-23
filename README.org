@@ -1,407 +1,102 @@
 #+TITLE: cclsh
 #+AUTHOR: Lukáš Hozda
 
-A system shell running inside Clozure CL. Every command line is either a
-Unix command or a Lisp form, evaluated in a live CCL image.
+A system shell running inside Clozure CL. Ordinary Unix commands and Common
+Lisp forms share one live image, so the boundary between shell use and Lisp is
+small and explicit.
 
-This is not a POSIX shell. Command strings, scripts, pipelines and redirection
-use cclsh syntax. Try it as an ordinary shell before considering login-shell
-use.
+cclsh targets Linux x86-64. It is not a POSIX shell: command strings, scripts,
+pipelines and redirection use cclsh syntax. Try it as an ordinary shell before
+considering login-shell use.
 
-* Installation
+* Try it
 
-** Nix flake (recommended)
-
-The reproducible package supports Linux x86-64 and needs only Nix with flakes
-enabled:
+With Nix flakes enabled:
 
 #+begin_src sh
 nix run github:luciusmagn/cclsh -- --version
+nix run github:luciusmagn/cclsh
+#+end_src
+
+Then type these lines inside cclsh:
+
+#+begin_src text
+pwd
+(+ 1 2)
+echo "Lisp result:" (+ 20 22)
+help
+#+end_src
+
+The first line runs a normal command, the second evaluates Lisp, and the third
+substitutes a Lisp result into a command.
+
+* Install
+
+The Nix flake is the recommended package:
+
+#+begin_src sh
 nix profile install github:luciusmagn/cclsh
 cclsh --version
 #+end_src
 
-From a checkout, use =nix run .= or =nix profile install .#cclsh=. The flake
-rebuilds CCL 1.13 from the exact downstream CCL commits and Clinedi revision
-recorded in =dependencies.lock=, and includes a pinned Quicklisp client and
-distribution index. =nix flake check= builds the complete package and checks
-its command boundary and installed Quicklisp state.
+From a checkout, use =nix run .= or =nix profile install .#cclsh=.
 
-Every saved image uses an existing =~/quicklisp= when one is present. Otherwise
-it initializes an embedded, sanitized client and distribution index under
-=${XDG_DATA_HOME:-$HOME/.local/share}/cclsh/quicklisp= on first use. Set
-=CCLSH_QUICKLISP_HOME= to choose another location. Quicklisp downloads and
-compiled files use that writable tree rather than the saved image or Nix store.
-An explicit target that already exists must contain =setup.lisp=; an invalid
-or unwritable target is reported and refused.
+See [[file:docs/installation.org][Installing cclsh]] for Quicklisp state, source
+builds, local installation and the guarded shared login-shell procedure.
 
-Normal interactive sessions and configured =-lc=/=-ic= commands load the
-selected Quicklisp home's =local-init= files. Plain =-c=, scripts and safe mode
-do not execute them, preserving their user-state-free behavior.
+* Shell and Lisp
 
-The flake installs an ordinary user command. It deliberately does not edit
-=/etc/shells= or run =chsh=. A Nix profile symlink is not the attested,
-root-owned stable path created by the shared-shell installer below.
+A submitted line is interpreted by its shape:
 
-** Building from source
+- A line beginning with =(= is evaluated as Common Lisp in the =cclsh-user=
+  package.
+- Any other line starts in command mode and resolves a builtin or executable.
+- Parenthesized Lisp inside a command is evaluated and substituted into its
+  arguments.
 
-Source development is tested on Linux x86-64 with CCL 1.13. It requires Git,
-Quicklisp, GNU make, coreutils, findutils, grep, awk, util-linux, m4, binutils,
-and a C toolchain. Installation tooling also uses =flock=, =runuser= and
-=getent=. Clone Clinedi and check out the locked revision:
-
-#+begin_src sh
-git clone https://github.com/luciusmagn/clinedi.git ../clinedi
-clinedi_commit=$(sed -n 's/^clinedi=//p' dependencies.lock)
-git -C ../clinedi checkout --detach "$clinedi_commit"
-#+end_src
-
-zoxide is optional. Install =fzf= as well when using its interactive =zi=
-command.
-
-For interactive Quicklisp use, register the checkout's parent in
-=~/quicklisp/local-init/common-lisp.lisp=:
+Pipelines, sequencing and redirection are Lisp forms rather than sh operators:
 
 #+begin_src lisp
-(in-package #:quicklisp-client)
-(pushnew (merge-pathnames #P"common-lisp/" (user-homedir-pathname))
-         *local-project-directories*
-         :test #'equal)
+(pipe (ls "-la") (grep "lisp"))
+(pipe (make) (to "build.log"))
+(capture (git "rev-parse" "--short" "HEAD"))
 #+end_src
 
-Set =CCLSH_QUICKLISP_SETUP= when =setup.lisp= is not at
-=~/quicklisp/setup.lisp=. Set =CCLSH_CLINEDI_SOURCE= when the Clinedi checkout
-is not at =../clinedi=. Every saved image includes Quicklisp and Clinedi. The
-build copies a strict Quicklisp metadata allowlist before loading it, so
-personal =local-init=, proxy configuration, caches and downloaded systems do
-not enter the image. It refuses a missing Quicklisp setup, a non-Git Clinedi
-source, a dirty checkout, or a revision mismatch.
+The same helpers are available to CCL programs after loading the =cclsh=
+system. Commands can also be defined in Lisp with =defcommand= and used from
+both command mode and Lisp.
 
-Stock CCL is enough for regression checks and unsaved REPL development:
+* Highlights
+
+- Clinedi line editing with history search, completion and highlighting
+- foreground process groups, Ctrl-C handling and =jobs=/=fg=/=bg=/=disown=
+- startup configuration in =~/.config/cclsh/startup.lisp=
+- command strings, scripts, shebang scripts and piped input
+- optional zoxide integration with =z= and =zi=
+
+* Documentation
+
+- [[file:docs/guide.org][User guide]]: syntax, substitution, pipelines, custom
+  commands, job control, completion, configuration and scripting
+- [[file:docs/installation.org][Installation]]: Nix, source builds and shared
+  login-shell deployment
+- [[file:examples/startup.lisp][Example startup file]]
+- [[file:docs/README.org][Documentation index]]
+
+The built-in manual is available as =help= inside cclsh, or as =cclsh help=
+from another shell. Use =cclsh help SECTION= for a specific topic.
+
+* Development
+
+Stock CCL 1.13 is sufficient for regression checks and unsaved REPL
+development:
 
 #+begin_src sh
 scripts/check
 #+end_src
 
-#+begin_src lisp
-(require :asdf)
-(asdf:load-system "cclsh")
-(cclsh:main)
-#+end_src
-
-A standalone saved image additionally requires the two downstream CCL changes.
-They live as commits in the [[https://github.com/luciusmagn/ccl][LuciusMagn CCL
-fork]], based on [[https://github.com/Clozure/ccl][Clozure CL]] 1.13. Clone
-the fork and select the exact final revision:
-
-#+begin_src sh
-git clone git@github.com:luciusmagn/ccl.git ../ccl
-git -C ../ccl checkout --detach 579c87300ee632af99182276f2ad40e1c38c5d0a
-make ccl-kernel CCL_SOURCE=../ccl
-make build CCL=../ccl/lx86cl64 \
-  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
-make install BINDIR="$HOME/.local/bin"
-#+end_src
-
-The boot image path is distribution-specific and must match the CCL source
-generation. At the selected fork revision, =ccl-kernel= recognizes both
-changes as already applied and builds them. The files under =patches/= are
-byte-stable mirrors retained because system-shell-build attestation hashes
-their exact contents. Nix fetches immutable diffs for the exact fork commits
-instead of following a branch. [[file:patches/README.org][The patch ledger]]
-records their hashes, provenance, validation and upstream status.
-
-=make build= produces a matched =cclsh= kernel and =cclsh.image= in the
-repository. It intentionally rejects stock CCL with
-=kernel consumed a cclsh command operand=. Run =make ccl-kernel= and select
-that rebuilt kernel instead. After a successful build, =make install= copies
-the already validated pair. To rebuild and install in one user-local command,
-pass the same kernel explicitly:
-
-#+begin_src sh
-CCLSH_CCL=../ccl/lx86cl64 \
-CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
-  scripts/install
-#+end_src
-
-** Shared login-shell installation
-
-Run checks, build an attested pair, and preserve that attestation through the
-integration checks:
-
-#+begin_src sh
-scripts/check
-make system-shell-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
-  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
-make integration-check CCL=../ccl/lx86cl64 \
-  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
-sudo make install-system-shell
-#+end_src
-
-=system-shell-build= verifies both downstream changes, performs a clean CCL
-kernel build through that exact checkout, publishes the saved image, and writes
-=cclsh.attestation= over the patch and artifact hashes. Do not run a plain
-=scripts/build= afterward because a plain build removes the attestation.
-
-=install-system-shell= installs one root-owned, user-neutral image at
-=/usr/local/bin/cclsh=, validates it before activation, switches its
-content-addressed release atomically, and registers the stable path in
-=/etc/shells=. It refuses a missing or stale attestation and never changes an
-account. Registration failure restores the previous release. =PREFIX=,
-=BINDIR= and =SHELLS_FILE= select custom system paths, whose parents must be
-canonical, root-owned and not writable by non-root users.
-
-Set =PROBE_USER= to run an additional clean-home probe as an existing account:
-
-#+begin_src sh
-sudo make install-system-shell PROBE_USER=USER
-#+end_src
-
-The probe is extra validation only. It neither binds the installation to that
-account nor changes its shell. Every account uses the same stable executable,
-while =startup.lisp=, history and writable Quicklisp state remain in that
-account's home or XDG directories. Reinstalling a new attested release updates
-the shared executable for every account without changing their configuration.
-
-Each account can copy the sanitized starter configuration and make it private:
-
-#+begin_src sh
-mkdir -p ~/.config/cclsh
-cp examples/startup.lisp ~/.config/cclsh/startup.lisp
-chmod 700 ~/.config/cclsh
-chmod 600 ~/.config/cclsh/startup.lisp
-#+end_src
-
-After testing the installed command and configured environment, that account
-only needs =chsh=:
-
-#+begin_src sh
-/usr/local/bin/cclsh --version
-env CCLSH_SAFE=1 /usr/local/bin/cclsh -c 'exit 0'
-/usr/local/bin/cclsh -lc 'echo $PATH'
-chsh -s /usr/local/bin/cclsh
-#+end_src
-
-Test optional startup tools such as zoxide separately. An administrator can use
-=sudo chsh -s /usr/local/bin/cclsh USER= for another account. Root uses this
-same shared path:
-
-#+begin_src sh
-sudo chsh -s /usr/local/bin/cclsh root
-#+end_src
-
-Before changing root, keep an existing privileged session open and verify a
-boot-loader or live-system recovery route.
-
-The conservative choice is to keep =root= or another privileged recovery
-account on a stock shell. If every privileged account uses cclsh, keep a tested
-boot-loader or live-system recovery route instead.
-
-Run the regression checks with:
-
-#+begin_src sh
-scripts/check
-#+end_src
-
-After process, pipeline or terminal changes, rebuild the saved image and
-run the PTY integration checks too. For an attested system installation, use
-the =system-shell-build= and =make integration-check= sequence above:
-
-#+begin_src sh
-CCLSH_CCL=../ccl/lx86cl64 \
-CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
-  scripts/build
-CCLSH_CCL=../ccl/lx86cl64 \
-CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
-  scripts/integration-check
-#+end_src
-
-* Behavior
-
-- A submitted line whose first non-whitespace character is =;= is a
-  full-line comment. It is ignored in the interactive shell, scripts,
-  piped input and command strings without changing the previous status.
-  Semicolons elsewhere remain literal command arguments. Interactive
-  comments remain available in history like other nonblank submissions.
-- A line starting with =(= is evaluated as Lisp in the =cclsh-user=
-  package, values are printed like a REPL.
-- Otherwise the first word resolves to a shell command: a symbol whose
-  value is a =command= instance runs as a builtin, anything else is
-  looked up in =PATH= and run as an external program.
-- When command lookup misses, a line containing only an explicit directory
-  path changes into it without spelling =cd=: =..=, =./src=, =src/= and
-  =~/work=. Builtins and executables still win, while a bare name such as
-  =src= remains a command lookup.
-- A lone word that names a bound variable, a keyword or a number
-  evaluates REPL style when no command matches: =*last-status*= alone
-  just prints its value.
-- In command mode, =~=, =$VAR=, =${VAR}= and =*=/=?= globs expand in bare
-  words. Quoting with ="..."= (variables expand) and ='...'= (literal) is
-  supported.
-- Parens substitute Lisp values into commands: =echo (*balls*)= prints
-  the variable, =echo (+ 1 2)= prints 3, proper lists splice, NIL vanishes.
-- Unfinished input continues on the next line: unbalanced Lisp forms,
-  open strings, and trailing backslashes.
-- Undefined functions are reported with suggestions before argument
-  evaluation can obscure them.
-- =~/.config/cclsh/startup.lisp= is loaded for interactive sessions and
-  configured one-shots, history persists in =~/.config/cclsh/history=
-  (=XDG_CONFIG_HOME= is respected). cclsh keeps the configuration directory
-  mode at =0700= and the history file at =0600= when it writes history.
-- With text entered, Up and C-p search older history entries containing the
-  complete draft. Lowercase searches ignore case; uppercase makes them
-  case-sensitive. Down and C-n walk newer matches and restore the exact draft
-  and cursor after the newest match. Empty input traverses all history.
-- The built-in prompt shows =username@hostname=, the current Lisp package,
-  directory and status sigil. Set =*prompt-function*= in =startup.lisp= to
-  supply any other prompt policy or external renderer.
-- External commands run as the terminal's foreground process group, so
-  interactive programs work and Ctrl-C reaches the child, not the
-  shell. Errors and Ctrl-C never drop you into the CCL debugger.
-- Job control: =command &= starts a background job, Ctrl-Z stops the
-  foreground command or pipeline, and =jobs=, =fg=, =bg= and =disown=
-  manage them. =disown= accepts a job id or command substring and removes
-  the job from shell management without signaling it. Finished background
-  jobs are announced before the next prompt. =exit= warns once about stopped
-  jobs. Orderly exit sends SIGHUP to tracked live jobs and SIGCONT to tracked
-  stopped jobs so logout does not leave them behind.
-- =cclsh -c command=, script files, shebang scripts and piped input run
-  without user state. Remote operations therefore work for executables
-  already visible in sshd's environment, including ordinary system installs
-  of scp, rsync and git; user-profile-only tools need an absolute path or a
-  system-visible wrapper. Add =l= or =i= to command mode, such as
-  =cclsh -lc command=, to load =startup.lisp= first. Short flags combine
-  in any order. =CCLSH_SAFE=1= always skips startup.lisp and history.
-- By convention, cclsh scripts are named =NAME.sh.lisp=. This canonical
-  compound suffix is not a runtime requirement; extensionless scripts and
-  existing names still run. The final =.lisp= keeps the file recognizable to
-  Lisp tooling, while =.sh= marks it as shell-oriented code. Command-mode
-  lines and shebangs can still make it cclsh-specific rather than portable
-  Common Lisp source that =load= can read directly.
-- =cclsh help= prints the same built-in manual as =help= at the interactive
-  prompt, and =cclsh help SECTION= prints one or more sections. These manual
-  requests load no startup or history. Use =cclsh -- help= or =cclsh ./help=
-  to run a script file literally named =help=.
-- Scripts receive =*argv*= as a list containing the script path followed by
-  every argument after it. Arguments are preserved literally and are not
-  parsed as cclsh options. It is =nil= outside script mode. Use
-  =cclsh -- -script.sh.lisp argument= for a dash-prefixed script path. Keep the
-  executable basename =cclsh=, as the CCL kernel uses that name to recognize
-  cclsh's argument boundary.
-- Environment variables are lispy: =(setenv 'editor "vim")=,
-  =(getenv :home)=, =(setf (env 'port) 8000)=, plus =export= and
-  =unset= builtins. =CCLSH_PACKAGE= contains the canonical name of the
-  current Lisp package and is refreshed before the configured prompt
-  renderer and external commands launched through cclsh run.
-- =(zoxide-setup)= enables =z=, =zi= and automatic recording of every
-  successful =cd=. It is safe to call once from =startup.lisp= and does
-  nothing destructive when zoxide is unavailable.
-
-* Lisp helpers
-
-#+begin_src lisp
-;; Pipelines, sequencing, conditional chains, redirection
-(cmd git "status")                ; one command, mid-Lisp
-(pipe (ls "-la") (grep "lisp"))   ; ls -la | grep lisp
-(pipe (ls "-1" (glob "screenshot-*")) (wc "-l")) ; explicit glob splice
-(seq (make "clean") (make))       ; make clean ; make
-(all (make) (make "install"))     ; make && make install
-(any (probe) (fallback))          ; probe || fallback
-(pipe (make) (to "build.log"))    ; make > build.log, append-to appends
-(pipe (from "in.txt") (wc "-l"))  ; wc -l < in.txt
-(pipe (make) (error-to "err.log")) ; make 2> err.log
-(capture (make) (merge-error))    ; both streams, like 2>&1 in $(...)
-(capture (git "rev-parse" "HEAD")) ; $(git rev-parse HEAD) as a string
-
-;; Run a program directly, returns the exit status
-(run "git" "status")
-
-;; Define your own commands (usable from the command line and Lisp)
-(defcommand gs ()
-  "Short git status."
-  (run "git" "status" "--short"))
-
-;; Optional metadata drives parsing, completion and generated help.
-(defcommand deploy (directory &key force)
-  "Deploy a directory."
-  (:arguments
-   (directory :type :directory :help "Source directory.")
-   (force :type :boolean :short #\f :help "Replace existing output."))
-  (format t "deploying ~a~:[~; forcibly~]~%" directory force))
-
-;; Optional ranked directory navigation
-(zoxide-setup)
-;; z project       ; query zoxide and cd to the result
-;; zi              ; choose interactively through fzf
-#+end_src
-
-Stage arguments are Lisp expressions, so literal flags must be strings.
-Scalars make one argument, NIL vanishes, and proper lists splice one level.
-=(glob pattern...)= returns such a list using command-mode expansion rules;
-unmatched patterns remain literal, while ordinary strings never glob. =run=
-keeps ordinary function-call semantics, so use =apply= to spread a list into
-its arguments. When a =defcommand= stage calls =run= synchronously inside
-=pipe= or =capture=, =run= dynamically inherits that stage's standard streams
-and joins the surrounding pipeline job. External-program wrappers therefore
-compose with pipelines, redirection and job control.
-
-=*last-status*= holds the exit status of the last command.
-
-The =:arguments= declaration is opt-in. Required, optional, repeating and
-keyword parameters follow the Lisp lambda list; keyword parameters become
-long options and may have short spellings. Semantic types, choices and custom
-providers drive argument-aware Tab completion. =:convert t= opts into typed
-values, while existing commands without a declaration keep receiving raw
-strings. Declared commands support =COMMAND --help=, and =help COMMAND= renders
-generated help from the same metadata.
-
-By the way, this cuts both ways: once this checkout is visible to ASDF or
-Quicklisp, any Clozure Common Lisp program can =(ql:quickload :cclsh)= and
-call =run=, =pipe=, =capture= and friends directly, without starting the
-shell. See "Quicklisp and scripting" in the guide for details and caveats.
-
-* Line editor
-
-The interactive editor is provided by Clinedi. Arrow keys navigate history and
-the cursor. As you type, the newest
-matching history entry appears after the cursor in dim text; Right or
-C-f at the end accepts it. Multi-line history entries retain their
-newlines. Alt-Enter, or Shift-Enter in terminals that report it, inserts an
-explicit newline without submitting. Tab completes command names plus
-directories at a slash-free command position, file paths in path-shaped
-command words and undeclared arguments, and Lisp symbols. Declared commands
-complete option names with descriptions and choose semantic providers for
-paths, directories, commands, packages, environment variables, jobs and
-choices. Command-position directories
-keep the trailing =/= that makes them implicit =cd= paths. Supported keys:
-C-a/C-e (home/end), Ctrl-Left/Right (move by
-words), C-k/C-u (kill to end/whole line), C-w or C-Backspace/C-h (kill word),
-C-l (clear screen), C-d (EOF on an empty line), C-c (abort line). Input is
-highlighted with the standard 16 terminal colors: known commands green,
-builtins and valid implicit directory paths cyan, unknown commands red,
-strings yellow, comments and parens dim, keywords magenta, numbers cyan.
-Output that ends without a newline gets a reverse video ⏎ marker, fish style.
-The =help= builtin prints the built-in manual (=help substitution= etc.). The
-same manual is available outside the shell as =cclsh help= or
-=cclsh help SECTION=. =help COMMAND= shows generated command help.
-
-Clinedi's programmable keymap is exported as =*line-editor-keymap*= for
-=startup.lisp= customization. For example,
-=(clinedi:keymap-bind *line-editor-keymap* :word-right :right)= remaps the
-decoded Ctrl-Right event without changing Clinedi's defaults. The
-=docs/guide.org= file is the long form, including the declarative argument API,
-keymap layering and login shell setup.
-
-* Design notes
-
-- [[file:docs/yew-lish-adaptation.org][Yew and Lish adaptation report]] evaluates
-  upstream shell and editor ideas against CCLSH and Clinedi, with a ranked
-  implementation sequence.
-
-* Not yet
-
-=> < >>= characters in command mode (use the Lisp redirection
-stages), and a right-side prompt.
+Standalone image builds require the downstream CCL changes documented in the
+[[file:docs/installation.org][installation guide]].
 
 * License
 
