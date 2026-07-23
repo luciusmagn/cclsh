@@ -572,19 +572,21 @@ before pressing Up filters traversal with the smart-case rules described under
 
 =~/.config/cclsh/startup.lisp= loads in =cclsh-user= for interactive
 sessions and configured one-shots. A broken startup file prints its error
-and the shell continues anyway. =examples/startup.lisp= is a sanitized,
-host-neutral starting point that establishes a login-safe =PATH=, XDG
-directories, a couple of commands and optional zoxide integration:
+and the shell continues anyway. Create it with private permissions:
 
 #+begin_src sh
-mkdir -p ~/.config/cclsh
-cp examples/startup.lisp ~/.config/cclsh/startup.lisp
-chmod 700 ~/.config/cclsh
+install -d -m 700 ~/.config/cclsh
+touch ~/.config/cclsh/startup.lisp
 chmod 600 ~/.config/cclsh/startup.lisp
 #+end_src
 
-The repository copy deliberately omits credentials, private services,
-display/session addresses, locale policy and machine-specific tool paths.
+The [[file:../examples/startup.lisp][example startup file]] is a sanitized,
+host-neutral template that establishes a login-safe =PATH=, XDG directories,
+a few commands and optional zoxide integration. When copying it from a source
+checkout, use its absolute path rather than assuming that =examples/= exists in
+the current directory. The template deliberately omits credentials, private
+services, display/session addresses, locale policy and machine-specific tool
+paths.
 
 Prompt rendering is configured through =*prompt-function*=. Leave it =nil=
 for =prompt-default=, or set it to a function designator in =startup.lisp=.

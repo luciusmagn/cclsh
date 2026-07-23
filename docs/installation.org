@@ -82,12 +82,13 @@ git -C ../clinedi checkout --detach "$clinedi_commit"
 Set =CCLSH_CLINEDI_SOURCE= when the checkout is not at =../clinedi=. The build
 refuses a non-Git checkout, local modifications or a revision mismatch.
 
-For interactive Quicklisp development, register the parent directory in
-=~/quicklisp/local-init/common-lisp.lisp=:
+For interactive Quicklisp development, register the directory containing both
+checkouts in =~/quicklisp/local-init/common-lisp.lisp=. Replace the example path
+with your checkout parent:
 
 #+begin_src lisp
 (in-package #:quicklisp-client)
-(pushnew (merge-pathnames #P"common-lisp/" (user-homedir-pathname))
+(pushnew #P"/path/to/checkouts/"
          *local-project-directories*
          :test #'equal)
 #+end_src
@@ -216,14 +217,17 @@ non-root users.
 
 ** Configure an account
 
-Copy the starter configuration and keep it private:
+Create a private startup file:
 
 #+begin_src sh
-mkdir -p ~/.config/cclsh
-cp examples/startup.lisp ~/.config/cclsh/startup.lisp
-chmod 700 ~/.config/cclsh
+install -d -m 700 ~/.config/cclsh
+touch ~/.config/cclsh/startup.lisp
 chmod 600 ~/.config/cclsh/startup.lisp
 #+end_src
+
+Use the [[file:../examples/startup.lisp][example startup file]] as a template. If
+you have a source checkout, copy it from its absolute path rather than assuming
+that =examples/= exists in the current directory.
 
 A cclsh login shell does not source =/etc/profile= or another shell's
 configuration. Ensure that =PATH= retains required system directories such as

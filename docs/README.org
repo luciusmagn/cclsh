@@ -9,8 +9,8 @@
 - [[file:../examples/startup.lisp][Example startup file]] is a safe base for
   =~/.config/cclsh/startup.lisp=.
 
-The same reference is available inside cclsh with =help=, or from another shell
-with =cclsh help= and =cclsh help SECTION=.
+A concise built-in manual is available inside cclsh with =help=, or from
+another shell with =cclsh help= and =cclsh help SECTION=.
 
 * Maintainer documentation
 
