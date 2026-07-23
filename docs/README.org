@@ -1,0 +1,20 @@
+#+TITLE: cclsh documentation
+
+* User documentation
+
+- [[file:installation.org][Installation]] covers the Nix package, source builds and
+  shared login-shell deployment.
+- [[file:guide.org][User guide]] covers command syntax, Lisp evaluation, pipelines,
+  custom commands, job control, completion, configuration and scripting.
+- [[file:../examples/startup.lisp][Example startup file]] is a safe base for
+  =~/.config/cclsh/startup.lisp=.
+
+The same reference is available inside cclsh with =help=, or from another shell
+with =cclsh help= and =cclsh help SECTION=.
+
+* Maintainer documentation
+
+- [[file:../patches/README.org][CCL patch ledger]] records downstream patch
+  provenance, hashes and validation.
+- [[file:yew-lish-adaptation.org][Yew and Lish adaptation report]] evaluates
+  upstream shell and line-editor ideas for cclsh and Clinedi.

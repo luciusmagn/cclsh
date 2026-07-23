@@ -1,0 +1,282 @@
+#+TITLE: Installing cclsh
+#+AUTHOR: Lukáš Hozda
+
+cclsh supports Linux x86-64. The Nix flake is the recommended installation;
+source builds are intended for development and shared login-shell deployments.
+
+cclsh is not a POSIX shell. Use it as an ordinary shell before making it a
+login shell, and keep a working recovery shell available.
+
+* Nix package
+
+** Try it
+
+Run cclsh without installing it:
+
+#+begin_src sh
+nix run github:luciusmagn/cclsh
+#+end_src
+
+To check the package without starting an interactive session:
+
+#+begin_src sh
+nix run github:luciusmagn/cclsh -- --version
+#+end_src
+
+** Install for one user
+
+#+begin_src sh
+nix profile install github:luciusmagn/cclsh
+cclsh --version
+#+end_src
+
+From a checkout, use =nix run .= or =nix profile install .#cclsh=. Run =nix
+flake check= to build the complete package and test its command boundary and
+installed Quicklisp state.
+
+The flake rebuilds CCL 1.13 from the exact downstream CCL commits and Clinedi
+revision recorded in =dependencies.lock=. It installs an ordinary user command;
+it does not edit =/etc/shells= or change an account's login shell.
+
+** Quicklisp state
+
+A saved image uses =~/quicklisp= when it already exists. Otherwise cclsh copies
+its embedded, sanitized Quicklisp client and distribution index on first use to:
+
+#+begin_example
+${XDG_DATA_HOME:-$HOME/.local/share}/cclsh/quicklisp
+#+end_example
+
+Set =CCLSH_QUICKLISP_HOME= to choose another writable location. An existing
+explicit target must contain =setup.lisp=; invalid or unwritable targets are
+reported and refused.
+
+Interactive sessions and configured =-lc=/=-ic= commands load the selected
+Quicklisp home's =local-init= files. Plain =-c= commands, scripts, piped input
+and safe mode do not execute them.
+
+* Build from source
+
+** Requirements
+
+Source development is tested with CCL 1.13 on Linux x86-64. It requires:
+
+- Git and Quicklisp
+- GNU make, coreutils, findutils, grep, awk, util-linux, m4 and binutils
+- a C toolchain
+- =flock=, =runuser= and =getent= for installation tooling
+
+zoxide is optional. Install =fzf= as well to use zoxide's interactive =zi=
+command.
+
+** Fetch Clinedi
+
+Clone Clinedi beside the cclsh checkout and select the locked revision:
+
+#+begin_src sh
+git clone https://github.com/luciusmagn/clinedi.git ../clinedi
+clinedi_commit=$(sed -n 's/^clinedi=//p' dependencies.lock)
+git -C ../clinedi checkout --detach "$clinedi_commit"
+#+end_src
+
+Set =CCLSH_CLINEDI_SOURCE= when the checkout is not at =../clinedi=. The build
+refuses a non-Git checkout, local modifications or a revision mismatch.
+
+For interactive Quicklisp development, register the parent directory in
+=~/quicklisp/local-init/common-lisp.lisp=:
+
+#+begin_src lisp
+(in-package #:quicklisp-client)
+(pushnew (merge-pathnames #P"common-lisp/" (user-homedir-pathname))
+         *local-project-directories*
+         :test #'equal)
+#+end_src
+
+Set =CCLSH_QUICKLISP_SETUP= when Quicklisp's =setup.lisp= is elsewhere. Saved
+images include Quicklisp and Clinedi, but the build copies only an allowlist of
+Quicklisp metadata. Personal local init files, proxy settings, caches and
+downloaded systems do not enter the image.
+
+** Run from stock CCL
+
+Stock CCL is sufficient for regression checks and unsaved REPL development:
+
+#+begin_src sh
+scripts/check
+#+end_src
+
+#+begin_src lisp
+(require :asdf)
+(asdf:load-system "cclsh")
+(cclsh:main)
+#+end_src
+
+** Build a standalone image
+
+A standalone image requires the Linux xstate and cclsh argument-boundary
+changes from the [[https://github.com/luciusmagn/ccl][LuciusMagn CCL fork]], based
+on [[https://github.com/Clozure/ccl][Clozure CL]] 1.13. Clone the fork and select
+the exact supported revision:
+
+#+begin_src sh
+git clone https://github.com/luciusmagn/ccl.git ../ccl
+git -C ../ccl checkout --detach 579c87300ee632af99182276f2ad40e1c38c5d0a
+make ccl-kernel CCL_SOURCE=../ccl
+make build CCL=../ccl/lx86cl64 \
+  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+#+end_src
+
+The boot image path is distribution-specific and must match the CCL source
+generation. At the selected revision, =make ccl-kernel= recognizes both changes
+as already applied and builds the kernel.
+
+=make build= validates and activates a matched =cclsh= kernel and =cclsh.image=
+pair in the repository. It rejects stock CCL with =kernel consumed a cclsh
+command operand=. The files under =patches/= are byte-stable mirrors used by
+system-shell build attestation. See the [[file:../patches/README.org][patch
+ledger]] for hashes, provenance, validation and upstream status.
+
+Install the validated pair for one user:
+
+#+begin_src sh
+make install BINDIR="$HOME/.local/bin"
+#+end_src
+
+To rebuild and install in one command:
+
+#+begin_src sh
+CCLSH_CCL=../ccl/lx86cl64 \
+CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
+  scripts/install
+#+end_src
+
+=scripts/install= creates an owner-only installation in =~/.local/bin= by
+default. A root =make install= without =DESTDIR= is refused; use the shared
+system-shell procedure below instead.
+
+** Verify process and terminal changes
+
+Run the normal checks first:
+
+#+begin_src sh
+scripts/check
+#+end_src
+
+After process, pipeline or terminal changes, rebuild the saved image and run the
+PTY integration checks:
+
+#+begin_src sh
+CCLSH_CCL=../ccl/lx86cl64 \
+CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
+  scripts/build
+CCLSH_CCL=../ccl/lx86cl64 \
+CCLSH_CCL_IMAGE=/usr/lib/ccl/lx86cl64.image \
+  scripts/integration-check
+#+end_src
+
+* Install a shared login shell
+
+The shared installer creates one root-owned, user-neutral image and registers a
+stable executable path in =/etc/shells=. It never changes an account's shell.
+Startup, history and writable Quicklisp state remain private to each account.
+
+** Build and install an attested release
+
+Run the steps in this order:
+
+#+begin_src sh
+scripts/check
+make system-shell-build CCL_SOURCE=../ccl CCL=../ccl/lx86cl64 \
+  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+make integration-check CCL=../ccl/lx86cl64 \
+  CCL_IMAGE=/usr/lib/ccl/lx86cl64.image
+sudo make install-system-shell
+#+end_src
+
+=system-shell-build= verifies both downstream CCL changes, rebuilds the kernel,
+publishes the image and writes =cclsh.attestation= over the patch and artifact
+hashes. Do not run a plain =scripts/build= afterward; a plain build removes the
+attestation.
+
+=install-system-shell= validates the candidate before activation, switches its
+content-addressed release atomically and registers =/usr/local/bin/cclsh= in
+=/etc/shells=. It rejects a missing or stale attestation. Registration failure
+restores the previous release.
+
+Set =PROBE_USER= to add a clean-home launch as an existing account:
+
+#+begin_src sh
+sudo make install-system-shell PROBE_USER=USER
+#+end_src
+
+The probe is additional validation only. It does not bind the installation to
+that account. =PREFIX=, =BINDIR= and =SHELLS_FILE= select custom system paths;
+their parent directories must be canonical, root-owned and not writable by
+non-root users.
+
+** Configure an account
+
+Copy the starter configuration and keep it private:
+
+#+begin_src sh
+mkdir -p ~/.config/cclsh
+cp examples/startup.lisp ~/.config/cclsh/startup.lisp
+chmod 700 ~/.config/cclsh
+chmod 600 ~/.config/cclsh/startup.lisp
+#+end_src
+
+A cclsh login shell does not source =/etc/profile= or another shell's
+configuration. Ensure that =PATH= retains required system directories such as
+=/usr/local/bin=, =/usr/bin= and =/bin=. Test optional startup tools such as
+zoxide separately.
+
+** Change the login shell
+
+Probe the installed command and configured environment first:
+
+#+begin_src sh
+/usr/local/bin/cclsh --version
+env CCLSH_SAFE=1 /usr/local/bin/cclsh -c 'exit 0'
+/usr/local/bin/cclsh -lc 'echo $PATH'
+chsh -s /usr/local/bin/cclsh
+#+end_src
+
+An administrator can change another account with:
+
+#+begin_src sh
+sudo chsh -s /usr/local/bin/cclsh USER
+#+end_src
+
+Plain =-c= commands run without user state, as expected by sshd. Executables
+must already be visible in sshd's environment; user-profile-only programs need
+an absolute path or a system-visible wrapper. Use =-lc= when a command should
+load =startup.lisp=. Command strings always use cclsh syntax, not sh syntax.
+
+** Root and recovery
+
+Keep an existing privileged session open while testing. The conservative choice
+is to leave =root= or another privileged recovery account on a stock shell. If
+every privileged account uses cclsh, keep a tested boot-loader or live-system
+recovery route.
+
+Only after validating that recovery path should you change root:
+
+#+begin_src sh
+sudo chsh -s /usr/local/bin/cclsh root
+#+end_src
+
+Never use a repository artifact as an account's shell; it can disappear after a
+clean. If startup state fails, bypass it with:
+
+#+begin_src sh
+env CCLSH_SAFE=1 /usr/local/bin/cclsh
+#+end_src
+
+From a recovery account, restore a stock shell with =chsh= and verify the result
+with =getent passwd USER= before ending the recovery session.
+
+** Upgrade the shared shell
+
+Rebuild, rerun the integration checks and install another attested release. The
+atomic stable path updates every account that uses it. Repeat the clean
+=--version= and =-c= probes before relying on the new release.
