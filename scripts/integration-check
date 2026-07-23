@@ -27,32 +27,54 @@ then
     exit 2
 fi
 
-if ! IFS= read -r dependency_line < dependencies.lock; then
-    echo "cclsh integration: could not read dependencies.lock" >&2
-    exit 2
-fi
-expected_clinedi_commit=${dependency_line#clinedi=}
-if [ "$dependency_line" = "$expected_clinedi_commit" ] ||
-   [ "${#expected_clinedi_commit}" -ne 40 ]
+locked_dependency_commit()
+{
+    dependency_name=$1
+    dependency_prefix=$dependency_name=
+    dependency_commit=
+    dependency_count=0
+    while IFS= read -r dependency_line || [ -n "$dependency_line" ]; do
+        case "$dependency_line" in
+            "$dependency_prefix"*)
+                dependency_commit=${dependency_line#"$dependency_prefix"}
+                dependency_count=$((dependency_count + 1))
+                ;;
+        esac
+    done <dependencies.lock
+    if [ "$dependency_count" -ne 1 ] ||
+       [ "${#dependency_commit}" -ne 40 ]
+    then
+        return 1
+    fi
+    case "$dependency_commit" in
+        *[!0123456789abcdef]*) return 1 ;;
+    esac
+    printf '%s\n' "$dependency_commit"
+}
+if ! expected_clinedi_commit=$(locked_dependency_commit clinedi) ||
+   ! expected_cl_colorist_commit=$(
+       locked_dependency_commit cl-colorist
+   )
 then
     echo "cclsh integration: dependencies.lock is invalid" >&2
     exit 2
 fi
-case "$expected_clinedi_commit" in
-    *[!0123456789abcdef]*)
-        echo "cclsh integration: dependencies.lock is invalid" >&2
-        exit 2
-        ;;
-esac
 if ! CCLSH_SAFE=1 \
      CCLSH_EXPECTED_CLINEDI_COMMIT="$expected_clinedi_commit" \
+     CCLSH_EXPECTED_CL_COLORIST_COMMIT="$expected_cl_colorist_commit" \
      ./cclsh -c \
-     '(unless (string= cclsh:*cclsh-build-clinedi-commit*
-                       (cclsh:getenv "CCLSH_EXPECTED_CLINEDI_COMMIT"))
-        (error "saved image has stale Clinedi revision"))' \
+     '(unless
+          (and
+           (string=
+            cclsh:*cclsh-build-clinedi-commit*
+            (cclsh:getenv "CCLSH_EXPECTED_CLINEDI_COMMIT"))
+           (string=
+            cclsh:*cclsh-build-cl-colorist-commit*
+            (cclsh:getenv "CCLSH_EXPECTED_CL_COLORIST_COMMIT")))
+        (error "saved image has stale editor dependency revisions"))' \
      >/dev/null 2>&1
 then
-    echo "cclsh integration: ./cclsh.image has stale Clinedi code; run scripts/build first" >&2
+    echo "cclsh integration: ./cclsh.image has stale editor code; run scripts/build first" >&2
     exit 2
 fi
 

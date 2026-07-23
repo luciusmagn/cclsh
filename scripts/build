@@ -88,23 +88,38 @@ echo "Validating saved cclsh image..."
 validation_home=$(
     mktemp -d "$PWD/.cclsh-build-validation-home.XXXXXX"
 )
-if ! IFS= read -r dependency_line < dependencies.lock; then
-    echo "cclsh build: could not read dependencies.lock" >&2
-    exit 1
-fi
-expected_clinedi_commit=${dependency_line#clinedi=}
-if [ "$dependency_line" = "$expected_clinedi_commit" ] ||
-   [ "${#expected_clinedi_commit}" -ne 40 ]
+locked_dependency_commit()
+{
+    dependency_name=$1
+    dependency_prefix=$dependency_name=
+    dependency_commit=
+    dependency_count=0
+    while IFS= read -r dependency_line || [ -n "$dependency_line" ]; do
+        case "$dependency_line" in
+            "$dependency_prefix"*)
+                dependency_commit=${dependency_line#"$dependency_prefix"}
+                dependency_count=$((dependency_count + 1))
+                ;;
+        esac
+    done <dependencies.lock
+    if [ "$dependency_count" -ne 1 ] ||
+       [ "${#dependency_commit}" -ne 40 ]
+    then
+        return 1
+    fi
+    case "$dependency_commit" in
+        *[!0123456789abcdef]*) return 1 ;;
+    esac
+    printf '%s\n' "$dependency_commit"
+}
+if ! expected_clinedi_commit=$(locked_dependency_commit clinedi) ||
+   ! expected_cl_colorist_commit=$(
+       locked_dependency_commit cl-colorist
+   )
 then
-    echo "cclsh build: dependencies.lock has no full Clinedi commit" >&2
+    echo "cclsh build: dependencies.lock has invalid editor revisions" >&2
     exit 1
 fi
-case "$expected_clinedi_commit" in
-    *[!0123456789abcdef]*)
-        echo "cclsh build: dependencies.lock has an invalid Clinedi commit" >&2
-        exit 1
-        ;;
-esac
 build_root=$PWD
 if ! (
      cd "$validation_home"
@@ -115,6 +130,7 @@ if ! (
      CCLSH_SAFE=1 \
      CCLSH_QUICKLISP_SETUP="$validation_home/setup.lisp" \
      CCLSH_EXPECTED_CLINEDI_COMMIT="$expected_clinedi_commit" \
+     CCLSH_EXPECTED_CL_COLORIST_COMMIT="$expected_cl_colorist_commit" \
      LANG=C \
      LC_ALL=C \
      /usr/bin/timeout --signal=TERM --kill-after=1 \
@@ -135,25 +151,50 @@ if ! (
              (text-cell-width
                (and clinedi-package
                     (find-symbol "TEXT-CELL-WIDTH" clinedi-package)))
-             (expected
-               (cclsh:getenv "CCLSH_EXPECTED_CLINEDI_COMMIT")))
+             (cl-colorist-package (find-package "CL-COLORIST"))
+             (strip-ansi
+               (and cl-colorist-package
+                    (find-symbol "STRIP-ANSI" cl-colorist-package)))
+             (expected-clinedi
+               (cclsh:getenv "CCLSH_EXPECTED_CLINEDI_COMMIT"))
+             (expected-cl-colorist
+               (cclsh:getenv "CCLSH_EXPECTED_CL_COLORIST_COMMIT")))
         (when local-directories
           (setf (symbol-value local-directories)
-                (list #P"/definitely/missing/clinedi-local-projects/")))
+                (list #P"/definitely/missing/editor-local-projects/")))
         (let ((clear-system (find-symbol "CLEAR-SYSTEM" "ASDF")))
           (when (and clear-system (fboundp clear-system))
-            (funcall clear-system "clinedi")))
+            (funcall clear-system "clinedi")
+            (funcall clear-system "cl-colorist")))
         (unless (and quickload (fboundp quickload))
           (error "saved image does not provide QL:QUICKLOAD"))
         (unless (and edit-line (fboundp edit-line)
                      text-cell-width (fboundp text-cell-width)
                      (= 4 (funcall text-cell-width "你好")))
           (error "saved image does not contain functional Clinedi code"))
-        (unless (and expected
-                     (string= expected
+        (unless (and strip-ansi
+                     (fboundp strip-ansi)
+                     (string=
+                      "red"
+                      (funcall
+                       strip-ansi
+                       (format nil "~c[31mred~c[0m"
+                               (code-char 27)
+                               (code-char 27)))))
+          (error "saved image does not contain functional cl-colorist code"))
+        (unless (and expected-clinedi
+                     (string= expected-clinedi
                               cclsh:*cclsh-build-clinedi-commit*))
           (error "saved image Clinedi commit ~s does not match lock ~s"
-                 cclsh:*cclsh-build-clinedi-commit* expected))
+                 cclsh:*cclsh-build-clinedi-commit* expected-clinedi))
+        (unless (and expected-cl-colorist
+                     (string=
+                      expected-cl-colorist
+                      cclsh:*cclsh-build-cl-colorist-commit*))
+          (error
+           "saved image cl-colorist commit ~s does not match lock ~s"
+           cclsh:*cclsh-build-cl-colorist-commit*
+           expected-cl-colorist))
         (values))'
      )
 then

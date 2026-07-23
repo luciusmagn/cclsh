@@ -515,6 +515,12 @@
 (check-equal "Clinedi supplies Unicode cell geometry"
              2
              (clinedi:text-cell-width "猫"))
+(check-equal "cl-colorist supplies Clinedi ANSI parsing"
+             "red"
+             (cl-colorist:strip-ansi
+              (format nil "~c[31mred~c[0m"
+                      (code-char 27)
+                      (code-char 27))))
 (check-equal "CCLSH owns a configurable Clinedi keymap"
              t
              (typep cclsh:*line-editor-keymap* 'clinedi:keymap))

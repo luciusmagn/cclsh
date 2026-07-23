@@ -45,23 +45,32 @@ fi
              (load setup :verbose nil :external-format :utf-8))
            (uiop:symbol-call (quote #:ql)
                              (quote #:register-local-projects))
-           (asdf:clear-system "clinedi")
-           (let ((local-asd
-                   (uiop:symbol-call
-                    (quote #:ql) (quote #:local-projects-searcher)
-                    "clinedi")))
-             (unless local-asd
-               (error "Quicklisp local projects do not contain clinedi"))
-             (setf local-asd (truename local-asd))
-             (asdf:load-asd local-asd)
-             (let ((selected
-                     (truename
-                      (asdf:system-source-file
-                       (asdf:find-system "clinedi")))))
-               (unless (equal local-asd selected)
-                 (error "ASDF selected Clinedi from ~a instead of ~a"
-                        selected local-asd)))
-             (asdf:load-system "clinedi" :force t))
+           (labels ((load-local-system (name)
+                      (asdf:clear-system name)
+                      (let ((local-asd
+                              (uiop:symbol-call
+                               (quote #:ql)
+                               (quote #:local-projects-searcher)
+                               name)))
+                        (unless local-asd
+                          (error
+                           "Quicklisp local projects do not contain ~a"
+                           name))
+                        (setf local-asd (truename local-asd))
+                        (asdf:load-asd local-asd)
+                        (let ((selected
+                                (truename
+                                 (asdf:system-source-file
+                                  (asdf:find-system name)))))
+                          (unless (equal local-asd selected)
+                            (error
+                             "ASDF selected ~a from ~a instead of ~a"
+                             name selected local-asd)))
+                        (asdf:load-system name :force t))))
+             (load-local-system "cl-colorist")
+             (load-local-system "clinedi"))
+           (asdf:test-system "cl-colorist")
+           (asdf:test-system "clinedi")
            (load "tests/check.lisp" :external-format :utf-8))
        (serious-condition (condition)
          (format *error-output* "cclsh check loader failed: ~a~%" condition)

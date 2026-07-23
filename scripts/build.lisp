@@ -140,14 +140,25 @@
                          (get-output-stream-string output)))))
     (error () nil)))
 
-(defun build-clinedi-lock-commit ()
-  "Return the exact Clinedi commit recorded in dependencies.lock."
+(defparameter *build-dependency-specifications*
+  '((:name              "cl-colorist"
+     :environment       "CCLSH_CL_COLORIST_SOURCE"
+     :default-directory "../cl-colorist/"
+     :asd               "cl-colorist.asd")
+    (:name              "clinedi"
+     :environment       "CCLSH_CLINEDI_SOURCE"
+     :default-directory "../clinedi/"
+     :asd               "clinedi.asd"))
+  "Locked source dependencies loaded into the saved image, in load order.")
+
+(defun build-lock-commit (name)
+  "Return the exact commit recorded for dependency NAME."
   (handler-case
       (with-open-file (stream "dependencies.lock"
                               :direction       ':input
                               :external-format ':utf-8)
         (let ((commits '())
-              (prefix  "clinedi="))
+              (prefix  (concatenate 'string name "=")))
           (loop for line = (read-line stream nil nil)
                 while line
                 when (and (<= (length prefix) (length line))
@@ -161,7 +172,8 @@
                                        (not (find character "ABCDEF"))))
                                 commit))
               (build-fail
-               "dependencies.lock must contain exactly one clinedi=<40-character lowercase Git commit> line"))
+               "dependencies.lock must contain exactly one ~a=<40-character lowercase Git commit> line"
+               name))
             commit)))
     (error (condition)
       (build-fail "could not read dependencies.lock: ~a" condition))))
@@ -186,38 +198,46 @@
 
 (build-load-quicklisp)
 
-(defvar *build-clinedi-identity* nil
-  "Verified pathname, repository and commit of the loaded Clinedi system.")
+(defvar *build-dependency-identities* nil
+  "Verified paths, repositories and commits of loaded source dependencies.")
 
-(defun build-initialize-source-registry (clinedi-asd)
-  "Expose only this checkout and CLINEDI-ASD to ASDF."
-  (let ((root              (truename "./"))
-        (clinedi-directory
-          (uiop:pathname-directory-pathname clinedi-asd)))
+(defun build-initialize-source-registry (identities)
+  "Expose only this checkout and locked dependency directories to ASDF."
+  (let ((root (truename "./")))
     (asdf:initialize-source-registry
      `(:source-registry
        (:directory ,root)
-       (:directory ,clinedi-directory)
+       ,@(mapcar
+          (lambda (identity)
+            `(:directory
+              ,(uiop:pathname-directory-pathname
+                (getf identity ':asd))))
+          identities)
        :ignore-inherited-configuration)))
   (values))
 
-(defun build-clinedi-asd-pathname ()
-  "Return the explicit sibling or overridden Clinedi ASD pathname."
-  (let* ((override (build-getenv-utf-8 "CCLSH_CLINEDI_SOURCE"))
+(defun build-dependency-asd-pathname (specification)
+  "Return the sibling or overridden ASD for SPECIFICATION."
+  (let* ((name        (getf specification ':name))
+         (environment (getf specification ':environment))
+         (override    (build-getenv-utf-8 environment))
          (directory
            (if (and override (plusp (length override)))
                (uiop:ensure-directory-pathname (pathname override))
-               (merge-pathnames "../clinedi/" (truename "./"))))
-         (asd (merge-pathnames "clinedi.asd" directory)))
+               (merge-pathnames
+                (getf specification ':default-directory)
+                (truename "./"))))
+         (asd (merge-pathnames (getf specification ':asd) directory)))
     (unless (probe-file asd)
       (build-fail
-       "Clinedi checkout is missing at ~a.~%Set CCLSH_CLINEDI_SOURCE to its repository directory."
-       directory))
+       "~a checkout is missing at ~a.~%Set ~a to its repository directory."
+       name directory environment))
     (truename asd)))
 
-(defun build-clinedi-identity (asd expected-commit)
-  "Return the clean, locked Git identity containing Clinedi ASD."
-  (let* ((directory
+(defun build-dependency-identity (specification asd expected-commit)
+  "Return the clean, locked Git identity containing ASD."
+  (let* ((name      (getf specification ':name))
+         (directory
            (uiop:pathname-directory-pathname asd))
          (root-output
            (build-git-output directory '("rev-parse" "--show-toplevel")))
@@ -229,60 +249,86 @@
                              '("status" "--porcelain"
                                "--untracked-files=all"))))
     (unless (and root-output (plusp (length root-output)))
-      (build-fail "the selected Clinedi system is not in a Git checkout: ~a"
-                  asd))
+      (build-fail "the selected ~a system is not in a Git checkout: ~a"
+                  name asd))
     (let* ((root         (truename (uiop:ensure-directory-pathname
                                     root-output)))
-           (expected-asd (truename (merge-pathnames "clinedi.asd" root))))
+           (expected-asd
+             (truename
+              (merge-pathnames (getf specification ':asd) root))))
       (unless (equal asd expected-asd)
         (build-fail "selected ~a instead of repository-root ~a"
                     asd expected-asd))
       (unless (and commit (string= commit expected-commit))
         (build-fail
-         "Clinedi checkout ~a is at ~a, but dependencies.lock requires ~a"
-         root (or commit "an unreadable commit") expected-commit))
+         "~a checkout ~a is at ~a, but dependencies.lock requires ~a"
+         name root (or commit "an unreadable commit") expected-commit))
       (unless (and (stringp status) (zerop (length status)))
-        (build-fail "Clinedi checkout ~a must be clean; Git reports:~%~a"
-                    root (or status "could not read repository status")))
-      (list :asd asd :root root :commit commit))))
+        (build-fail "~a checkout ~a must be clean; Git reports:~%~a"
+                    name root (or status "could not read repository status")))
+      (list :name          name
+            :specification specification
+            :asd           asd
+            :root          root
+            :commit        commit))))
 
-(defun build-load-clinedi ()
-  "Load the exact clean Clinedi revision selected for this build."
-  (let* ((expected-commit (build-clinedi-lock-commit))
-         (asd             (build-clinedi-asd-pathname))
-         (identity        (build-clinedi-identity asd expected-commit)))
-    (build-initialize-source-registry asd)
-    (asdf:load-asd asd)
-    (let ((selected
-            (truename
-             (asdf:system-source-file (asdf:find-system "clinedi")))))
+(defun build-loaded-dependency-identity (name)
+  "Return the verified identity for loaded dependency NAME."
+  (or (find name *build-dependency-identities*
+            :key (lambda (identity) (getf identity ':name))
+            :test #'string=)
+      (build-fail "no loaded identity exists for dependency ~a" name)))
+
+(defun build-load-dependencies ()
+  "Load every exact, clean source revision required by this build."
+  (setf *build-dependency-identities*
+        (mapcar
+         (lambda (specification)
+           (let ((asd
+                   (build-dependency-asd-pathname specification)))
+             (build-dependency-identity
+              specification
+              asd
+              (build-lock-commit (getf specification ':name)))))
+         *build-dependency-specifications*))
+  (build-initialize-source-registry *build-dependency-identities*)
+  (dolist (identity *build-dependency-identities*)
+    (let* ((name (getf identity ':name))
+           (asd  (getf identity ':asd)))
+      (asdf:load-asd asd)
+      (let ((selected
+              (truename
+               (asdf:system-source-file (asdf:find-system name)))))
+        (unless (equal asd selected)
+          (build-fail "ASDF selected ~a from ~a instead of ~a"
+                      name selected asd)))
+      ;; Do not let an older cached FASL stand in for locked source.
+      (asdf:load-system name :force t)
+      (format t "Including ~a ~a from ~a~%"
+              name (getf identity ':commit) asd)
+      (finish-output)))
+  (values))
+
+(defun build-verify-dependency-identities ()
+  "Require every loaded dependency to retain its verified identity."
+  (dolist (identity *build-dependency-identities*)
+    (let* ((name          (getf identity ':name))
+           (specification (getf identity ':specification))
+           (expected      (getf identity ':commit))
+           (asd           (getf identity ':asd))
+           (current
+             (build-dependency-identity specification asd expected))
+           (selected
+             (truename
+              (asdf:system-source-file (asdf:find-system name)))))
+      (unless (equal identity current)
+        (build-fail "~a identity changed while cclsh was being built" name))
       (unless (equal asd selected)
-        (build-fail "ASDF selected Clinedi from ~a instead of ~a"
-                    selected asd)))
-    ;; Do not let an older cached FASL stand in for the locked source tree.
-    (asdf:load-system "clinedi" :force t)
-    (setf *build-clinedi-identity* identity)
-    (format t "Including Clinedi ~a from ~a~%"
-            expected-commit asd)
-    (finish-output))
+        (build-fail "ASDF's selected ~a changed from ~a to ~a"
+                    name asd selected))))
   (values))
 
-(defun build-verify-clinedi-identity ()
-  "Require the loaded Clinedi checkout to retain its verified identity."
-  (let* ((expected-commit (getf *build-clinedi-identity* ':commit))
-         (asd             (getf *build-clinedi-identity* ':asd))
-         (current         (build-clinedi-identity asd expected-commit))
-         (selected
-           (truename
-            (asdf:system-source-file (asdf:find-system "clinedi")))))
-    (unless (equal *build-clinedi-identity* current)
-      (build-fail "Clinedi identity changed while cclsh was being built"))
-    (unless (equal asd selected)
-      (build-fail "ASDF's selected Clinedi changed from ~a to ~a"
-                  asd selected)))
-  (values))
-
-(build-load-clinedi)
+(build-load-dependencies)
 
 (defun build-load-cclsh ()
   "Load cclsh from this checkout after its locked dependency."
@@ -296,7 +342,7 @@
     (asdf:load-system "cclsh" :force t)))
 
 (build-load-cclsh)
-(build-verify-clinedi-identity)
+(build-verify-dependency-identities)
 
 (defun build-read-file-octets (file)
   "Read FILE into a simple octet vector."
@@ -338,8 +384,11 @@
                 (concatenate 'string commit "-dirty")
                 commit))))))
 
-(let* ((commit          (build-git-commit))
-       (clinedi-commit  (getf *build-clinedi-identity* ':commit))
+(let* ((commit (build-git-commit))
+       (clinedi-commit
+         (getf (build-loaded-dependency-identity "clinedi") ':commit))
+       (cl-colorist-commit
+         (getf (build-loaded-dependency-identity "cl-colorist") ':commit))
        (quicklisp-template
          (build-getenv-utf-8 "CCLSH_PACKAGED_QUICKLISP_TEMPLATE"))
        (quicklisp-files
@@ -348,6 +397,7 @@
            (build-quicklisp-template-files))))
   (setf cclsh:*cclsh-build-commit*          commit
         cclsh:*cclsh-build-clinedi-commit* clinedi-commit
+        cclsh:*cclsh-build-cl-colorist-commit* cl-colorist-commit
         cclsh::*packaged-quicklisp-template*
         (and quicklisp-template
              (plusp (length quicklisp-template))
@@ -361,12 +411,17 @@
 ;; Keep the heap image separate from the kernel so installers can activate
 ;; a matched, content-addressed pair atomically. scripts/build installs the
 ;; local pair only after both files exist and the saved image validates.
-(build-verify-clinedi-identity)
-(dolist (system '("cclsh" "clinedi" "clinedi/tests" "quicklisp"))
+(build-verify-dependency-identities)
+(dolist (system '("cclsh"
+                  "clinedi"
+                  "clinedi/tests"
+                  "cl-colorist"
+                  "cl-colorist/tests"
+                  "quicklisp"))
   (asdf:clear-system system))
 (format t "Copying the CCL kernel...~%")
 (uiop:copy-file (truename "/proc/self/exe") "cclsh.new")
-(setf *build-clinedi-identity* nil)
+(setf *build-dependency-identities* nil)
 (when *build-quicklisp-home*
   (uiop:delete-directory-tree *build-quicklisp-home*
                               :validate t

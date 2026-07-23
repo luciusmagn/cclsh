@@ -34,6 +34,7 @@
            #:*cclsh-version*
            #:*cclsh-build-commit*
            #:*cclsh-build-clinedi-commit*
+           #:*cclsh-build-cl-colorist-commit*
            #:*argv*
            #:*directory-change-hooks*
            #:*prompt-function*

@@ -306,8 +306,8 @@ functions so future context additions remain compatible.
   Home/End C-a/C-e     line ends     C-k/C-u     kill rest/line
   Backspace / Delete   delete        C-l/C-c     clear/abort
   C-d                  delete forward, or exit on an empty line
-  Alt-Enter            insert a newline without submitting
-  Shift-Enter          same when the terminal reports modified Enter
+  Alt/Ctrl-Enter       insert a newline without submitting
+  Shift-Enter          same with CSI-u or modifyOtherKeys support
 
 Clinedi key bindings are programmable from startup.lisp through
 *line-editor-keymap*. Events and built-in commands use semantic keywords:
@@ -416,9 +416,9 @@ its stale hook and command bindings.")
   nix profile install github:luciusmagn/cclsh
 
 From a checkout, use nix run . or nix profile install .#cclsh. The flake
-rebuilds CCL 1.13 from the exact downstream CCL commits and Clinedi revision
-in dependencies.lock, and includes pinned Quicklisp metadata. nix flake check
-builds and tests the installed result.
+rebuilds CCL 1.13 from the exact downstream CCL commits and editor dependency
+revisions in dependencies.lock, and includes pinned Quicklisp metadata. nix
+flake check builds and tests the installed result.
 
 Every saved image uses an existing ~/quicklisp or initializes an embedded,
 sanitized client and distribution index in a writable tree below

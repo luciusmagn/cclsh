@@ -34,9 +34,9 @@ From a checkout, use =nix run .= or =nix profile install .#cclsh=. Run =nix
 flake check= to build the complete package and test its command boundary and
 installed Quicklisp state.
 
-The flake rebuilds CCL 1.13 from the exact downstream CCL commits and Clinedi
-revision recorded in =dependencies.lock=. It installs an ordinary user command;
-it does not edit =/etc/shells= or change an account's login shell.
+The flake rebuilds CCL 1.13 from the exact downstream CCL commits and editor
+dependency revisions recorded in =dependencies.lock=. It installs an ordinary
+user command; it does not edit =/etc/shells= or change an account's login shell.
 
 ** Quicklisp state
 
@@ -69,22 +69,27 @@ Source development is tested with CCL 1.13 on Linux x86-64. It requires:
 zoxide is optional. Install =fzf= as well to use zoxide's interactive =zi=
 command.
 
-** Fetch Clinedi
+** Fetch editor dependencies
 
-Clone Clinedi beside the cclsh checkout and select the locked revision:
+Clone Clinedi and cl-colorist beside the cclsh checkout and select their locked
+revisions:
 
 #+begin_src sh
 git clone https://github.com/luciusmagn/clinedi.git ../clinedi
+git clone https://github.com/luciusmagn/cl-colorist.git ../cl-colorist
 clinedi_commit=$(sed -n 's/^clinedi=//p' dependencies.lock)
+cl_colorist_commit=$(sed -n 's/^cl-colorist=//p' dependencies.lock)
 git -C ../clinedi checkout --detach "$clinedi_commit"
+git -C ../cl-colorist checkout --detach "$cl_colorist_commit"
 #+end_src
 
-Set =CCLSH_CLINEDI_SOURCE= when the checkout is not at =../clinedi=. The build
-refuses a non-Git checkout, local modifications or a revision mismatch.
+Set =CCLSH_CLINEDI_SOURCE= or =CCLSH_CL_COLORIST_SOURCE= when a checkout is not
+at its default sibling path. The build refuses a non-Git checkout, local
+modifications or a revision mismatch.
 
-For interactive Quicklisp development, register the directory containing both
-checkouts in =~/quicklisp/local-init/common-lisp.lisp=. Replace the example path
-with your checkout parent:
+For interactive Quicklisp development, register the directory containing the
+checkouts in =~/quicklisp/local-init/common-lisp.lisp=. Replace the example
+path with your checkout parent:
 
 #+begin_src lisp
 (in-package #:quicklisp-client)
@@ -94,9 +99,9 @@ with your checkout parent:
 #+end_src
 
 Set =CCLSH_QUICKLISP_SETUP= when Quicklisp's =setup.lisp= is elsewhere. Saved
-images include Quicklisp and Clinedi, but the build copies only an allowlist of
-Quicklisp metadata. Personal local init files, proxy settings, caches and
-downloaded systems do not enter the image.
+images include Quicklisp, Clinedi and cl-colorist, but the build copies only an
+allowlist of Quicklisp metadata. Personal local init files, proxy settings,
+caches and downloaded systems do not enter the image.
 
 ** Run from stock CCL
 

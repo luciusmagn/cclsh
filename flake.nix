@@ -38,12 +38,21 @@
       cclXstateRev = dependencyRevision "ccl-xstate";
       cclRev = dependencyRevision "ccl";
       clinediRev = dependencyRevision "clinedi";
+      clColoristRev = dependencyRevision "cl-colorist";
 
       clinediSource = pkgs.fetchgit {
         name = "clinedi-${builtins.substring 0 7 clinediRev}";
         url = "https://github.com/luciusmagn/clinedi.git";
         rev = clinediRev;
-        hash = "sha256-hF6JIxDd8wCuv9n0cXp1klyempiry594vk5jeE2a/xI=";
+        hash = "sha256-1H4dHkIw9/w5bg5ZDpYTePKBfONlc2eROgs1ynI80ao=";
+        leaveDotGit = true;
+      };
+
+      clColoristSource = pkgs.fetchgit {
+        name = "cl-colorist-${builtins.substring 0 7 clColoristRev}";
+        url = "https://github.com/luciusmagn/cl-colorist.git";
+        rev = clColoristRev;
+        hash = "sha256-Y4DC47Rqg+V6OR7w/wiq2zf8vKu2HUtK70PZZS+V8SA=";
         leaveDotGit = true;
       };
 
@@ -188,6 +197,11 @@
           git -C "$out/share/cclsh/clinedi" reset --hard ${clinediRev}
           git -C "$out/share/cclsh/clinedi" clean -fdx
 
+          cp -R ${clColoristSource} "$out/share/cclsh/cl-colorist"
+          chmod -R u+w "$out/share/cclsh/cl-colorist"
+          git -C "$out/share/cclsh/cl-colorist" reset --hard ${clColoristRev}
+          git -C "$out/share/cclsh/cl-colorist" clean -fdx
+
           cp -R ${quicklispTemplate} "$TMPDIR/quicklisp"
           chmod -R u+w "$TMPDIR/quicklisp"
           mkdir -p "$TMPDIR/quicklisp/local-init"
@@ -200,6 +214,7 @@
           export CCLSH_CCL_IMAGE=${patchedCcl}/share/ccl-installation/lx86cl64.image
           export CCLSH_BUILD_COMMIT=${lib.escapeShellArg buildCommit}
           export CCLSH_CLINEDI_SOURCE="$out/share/cclsh/clinedi"
+          export CCLSH_CL_COLORIST_SOURCE="$out/share/cclsh/cl-colorist"
           export CCLSH_QUICKLISP_SETUP="$TMPDIR/quicklisp/setup.lisp"
           export CCLSH_PACKAGED_QUICKLISP_TEMPLATE="$out/share/cclsh/quicklisp"
           export ASDF_OUTPUT_TRANSLATIONS="$PWD/:$TMPDIR/cclsh-fasl/"
@@ -216,6 +231,7 @@
           cp -L cclsh.image "$out/bin/cclsh.image"
           cp -R ${quicklispTemplate}/. "$out/share/cclsh/quicklisp/"
           rm -rf "$out/share/cclsh/clinedi/.git"
+          rm -rf "$out/share/cclsh/cl-colorist/.git"
 
           runHook postInstall
         '';
@@ -254,6 +270,8 @@
 
           ${lib.getExe cclsh} --version >version
           grep -F "cclsh 1.1.0" version
+          grep -F "clinedi ${clinediRev}" version
+          grep -F "cl-colorist ${clColoristRev}" version
           ${lib.getExe cclsh} -c 'exit 0'
           ${lib.getExe cclsh} -c \
             '(progn (unless (and (probe-file (merge-pathnames "setup.lisp" ql-setup:*quicklisp-home*)) (ql-dist:find-dist "quicklisp") (uiop:subpathp asdf:*user-cache* (uiop:ensure-directory-pathname (pathname (cclsh:getenv "XDG_CACHE_HOME")))) (member #P"${cclsh}/share/cclsh/" ql::*local-project-directories* :test (function equal))) (error "packaged Quicklisp is not writable and initialized")) (values))'

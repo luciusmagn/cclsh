@@ -516,11 +516,11 @@ used to replace it.
 | C-u                 | discard the whole line              |
 | C-l                 | clear screen                        |
 | C-c                 | abort the current line              |
-| Alt-Enter           | insert a newline without submitting |
+| Alt/Ctrl-Enter      | insert a newline without submitting |
 | Shift-Enter (*)     | same when reported by the terminal  |
 
-(*) Shift-Enter requires a terminal that reports modified Enter through CSI-u
-or modifyOtherKeys sequences.
+(*) Clinedi requests CSI-u and modifyOtherKeys reporting while it owns the
+terminal. Modified Enter works when the terminal supports either protocol.
 
 At a slash-free command position, Tab completes command names (=PATH=
 executables plus defined commands) and directories. For self-describing
@@ -626,9 +626,9 @@ Clinedi's defaults or another editor.
 
 * Quicklisp and scripting
 
-Every saved cclsh image includes Quicklisp and the pinned Clinedi line editor, so
-=(ql:quickload :system)= works immediately and makes the shell a decent
-scripting host:
+Every saved cclsh image includes Quicklisp and the pinned Clinedi and
+cl-colorist editor dependencies, so =(ql:quickload :system)= works immediately
+and makes the shell a decent scripting host:
 
 #+begin_src lisp
 (ql:quickload :dexador)

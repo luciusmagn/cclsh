@@ -615,6 +615,14 @@ exit 0
                  (truename "../clinedi/"))))
          (clinedi-asd
            (truename (merge-pathnames "clinedi.asd" clinedi-directory)))
+         (cl-colorist-directory
+           (let ((override (uiop:getenv "CCLSH_CL_COLORIST_SOURCE")))
+             (if (and override (plusp (length override)))
+                 (uiop:ensure-directory-pathname override)
+                 (truename "../cl-colorist/"))))
+         (cl-colorist-asd
+           (truename
+            (merge-pathnames "cl-colorist.asd" cl-colorist-directory)))
          (cclsh-asd (truename "cclsh.asd"))
          (ccl-command (or (uiop:getenv "CCLSH_TEST_CCL") "ccl"))
          (ccl-image (uiop:getenv "CCLSH_TEST_CCL_IMAGE"))
@@ -649,6 +657,7 @@ exit 0
               (ccl:external-call~%
                \"signal\" :int 22 :address (ccl:%int-to-ptr 0) :address)~%
               (load ~s :verbose nil :external-format :utf-8)~%
+              (asdf:load-asd ~s)~%
               (asdf:load-asd ~s)~%
               (asdf:load-asd ~s)~%
               (ql:quickload :cclsh :silent t)~%
@@ -711,6 +720,7 @@ exit 0
                             (sigttou-default-p)))))~%
               (ccl:quit 0)~%"
              (namestring setup)
+             (namestring cl-colorist-asd)
              (namestring clinedi-asd)
              (namestring cclsh-asd)))
     (let* ((result
@@ -1172,6 +1182,8 @@ false
                                           :test #'string=))
                              (not (member \"clinedi\" registered
                                           :test #'string=))
+                             (not (member \"cl-colorist\" registered
+                                          :test #'string=))
                              t)))
                  (format t \"__BAKED_QUICKLISP__~s:~s__~%\"
                          available portable)))"))
@@ -1183,7 +1195,7 @@ false
      (integration-tail output))))
 
 (defun integration-check-baked-clinedi ()
-  "Require the saved image to contain the pinned Clinedi implementation."
+  "Require the saved image to contain pinned, working editor dependencies."
   (let* ((result
            (integration-run
             "(let* ((package (find-package \"CLINEDI\"))
@@ -1194,17 +1206,34 @@ false
                     (width (and width-function (fboundp width-function)
                                 (funcall width-function \"猫\")))
                     (commit cclsh:*cclsh-build-clinedi-commit*)
+                    (colorist-package (find-package \"CL-COLORIST\"))
+                    (strip-ansi
+                      (and colorist-package
+                           (find-symbol \"STRIP-ANSI\" colorist-package)))
+                    (colorist-commit
+                      cclsh:*cclsh-build-cl-colorist-commit*)
                     (available (and editor (fboundp editor)
                                     (= width 2)
                                     (stringp commit)
-                                    (= (length commit) 40))))
+                                    (= (length commit) 40)
+                                    strip-ansi
+                                    (fboundp strip-ansi)
+                                    (string=
+                                     \"red\"
+                                     (funcall
+                                      strip-ansi
+                                      (format nil \"~c[31mred~c[0m\"
+                                              (code-char 27)
+                                              (code-char 27))))
+                                    (stringp colorist-commit)
+                                    (= (length colorist-commit) 40))))
                (format t \"__BAKED_CLINEDI__~s__~%\" available))"))
          (output (direct-result-output result)))
     (integration-require-success result "baked Clinedi")
     (integration-ensure
      (integration-contains-p "__BAKED_CLINEDI__T__" output)
-     "saved image has no pinned working Clinedi: ~a"
-     (integration-tail output))))
+      "saved image has no pinned working editor dependencies: ~a"
+      (integration-tail output))))
 
 (defun integration-check-zoxide ()
   "Require transactional setup, tracking and z/zi queries to share cd hooks."
@@ -2179,6 +2208,92 @@ false
                         (integration-tail output))
     count))
 
+(defun integration-check-enhanced-editor-input ()
+  "Require enhanced key encodings and balanced terminal reporting controls."
+  (let ((session nil)
+        (escape (code-char 27)))
+    (unwind-protect
+        (progn
+          (setf session (integration-session-start))
+          (integration-session-command
+           session
+           "(defun integration-enhanced-enter (&rest arguments)
+              (format t \"__ENHANCED_ENTER__~s__~%\" arguments))")
+          (let ((disable
+                  (format nil "~c[<u~c[>4;0m" escape escape))
+                (enable
+                  (format nil "~c[>4;0m~c[>1u~c[>4;2m"
+                          escape escape escape)))
+            (labels ((finish-input (text)
+                       (let ((start
+                               (integration-session-position session)))
+                         (integration-session-send session text)
+                         (let ((end
+                                 (integration-session-await-prompt
+                                  session start :timeout 8)))
+                           (subseq (integration-session-text session)
+                                   start end))))
+                     (require-balanced-controls (output label)
+                       (let ((disable-start (search disable output)))
+                         (integration-ensure
+                          disable-start
+                          "~a did not disable enhanced keyboard reporting: ~a"
+                          label (integration-tail output))
+                         (integration-ensure
+                          (null
+                           (search disable output
+                                   :start2 (+ disable-start
+                                              (length disable))))
+                          "~a completed more than one editor read: ~a"
+                          label (integration-tail output))
+                         (integration-ensure
+                          (search enable output
+                                  :start2 (+ disable-start
+                                             (length disable)))
+                          "~a did not enable reporting for the next prompt: ~a"
+                          label (integration-tail output)))))
+              (dolist (entry '(("CSI-u Ctrl-C" . "[99;5u")
+                               ("modifyOtherKeys Ctrl-C" . "[27;5;99~")))
+                (let* ((label (car entry))
+                       (output
+                         (finish-input
+                          (concatenate 'string
+                                       (string escape)
+                                       (cdr entry)))))
+                  (integration-ensure
+                   (integration-contains-p
+                    "^C" (integration-clean-text output))
+                   "~a did not abort the editor: ~a"
+                   label (integration-tail output))
+                  (require-balanced-controls output label)
+                  (integration-ensure
+                   (= 130 (integration-session-last-status session))
+                   "~a status was not 130" label)))
+              (dolist (entry '(("CSI-u modified Enter" . "[13;2u")
+                               ("modifyOtherKeys modified Enter"
+                                . "[27;2;13~")))
+                (let* ((label (car entry))
+                       (output
+                         (finish-input
+                          (concatenate
+                           'string
+                           "(integration-enhanced-enter 1"
+                           (string escape)
+                           (cdr entry)
+                           "2)"
+                           (string #\newline)))))
+                  (integration-ensure
+                   (integration-contains-p
+                    "__ENHANCED_ENTER__(1 2)__"
+                    (integration-clean-text output))
+                   "~a did not insert a logical newline: ~a"
+                   label (integration-tail output))
+                  (require-balanced-controls output label)
+                  (integration-ensure
+                   (zerop (integration-session-last-status session))
+                   "~a command returned nonzero" label))))))
+      (integration-session-stop session))))
+
 (defun integration-check-unicode-line-editing ()
   "Require PTY cursor movement and deletion to preserve graphemes."
   (let ((session (integration-session-start)))
@@ -2651,7 +2766,7 @@ false
                         #'integration-check-package-environment)
       (integration-test "Quicklisp baked into saved image"
                         #'integration-check-baked-quicklisp)
-      (integration-test "Clinedi baked into saved image"
+      (integration-test "editor dependencies baked into saved image"
                         #'integration-check-baked-clinedi)
       (integration-test "zoxide directory integration"
                         #'integration-check-zoxide)
@@ -2689,6 +2804,8 @@ false
                         #'integration-check-interactive)
       (integration-test "PTY Unicode grapheme editing"
                         #'integration-check-unicode-line-editing)
+      (integration-test "PTY enhanced key input and cleanup"
+                        #'integration-check-enhanced-editor-input)
       (integration-test "PTY typed substring history search"
                         #'integration-check-filtered-history)
       (integration-test "PTY in-process builtin job control"
